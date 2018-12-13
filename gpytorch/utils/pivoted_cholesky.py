@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import torch
+import math
 
 
 def pivoted_cholesky(matrix, max_iter, error_tol=1e-3):
@@ -89,18 +90,34 @@ def woodbury_factor(low_rank_mat, shift):
     .. math::
 
         \begin{equation*}
-            R = (I_k + 1/shift VV')^{-1}V
+            R = (1/a + V E^{-1} V')^{-1}V
         \end{equation*}
 
-    to be used in solves with (V'V + shift I) via the Woodbury formula
+    where :math:`a = \max |1/shift|` and :math:`E^{-1} = \frac{1}{a} \text{diag}(shift)`.
+    This is used in solves with (V'V + shift I) via the Woodbury formula
     """
+
     k = low_rank_mat.size(-2)
-    shifted_mat = low_rank_mat.matmul(low_rank_mat.transpose(-1, -2) / shift.unsqueeze(-1))
 
-    shifted_mat = shifted_mat + torch.eye(k, dtype=shifted_mat.dtype, device=shifted_mat.device)
+    # Scale the shift
+    inv_shift = shift.reciprocal()
+    scale = inv_shift.abs().max()
+    inv_shift = inv_shift.div(scale)
+    inv_shift = inv_shift.unsqueeze(-1)
 
-    R = torch.potrs(low_rank_mat, torch.cholesky(shifted_mat, upper=True))
-    return R
+    shifted_mat = low_rank_mat @ (inv_shift * low_rank_mat.transpose(-1, -2))
+    shifted_mat = shifted_mat + torch.eye(k, dtype=shifted_mat.dtype, device=shifted_mat.device).div(scale)
+
+    # Hack for half precision - switch over to float (because potrs is not supported for half)
+    if low_rank_mat.dtype == torch.float16:
+        chol = torch.cholesky(shifted_mat.float())
+        R = torch.potrs(low_rank_mat.float(), chol, upper=False)
+        return R.type_as(low_rank_mat)
+    else:
+        chol = torch.cholesky(shifted_mat)
+        R = torch.potrs(low_rank_mat, chol, upper=False)
+        print(f'factor - shape: {R.shape} \t diff: {(shifted_mat @ R - low_rank_mat).norm()}')
+        return R
 
 
 def woodbury_solve(vector, low_rank_mat, woodbury_factor, shift):
@@ -114,8 +131,15 @@ def woodbury_solve(vector, low_rank_mat, woodbury_factor, shift):
           and the shift, \sigma
         - shift (vector) - shift value sigma
     """
-    if vector.ndimension() > 1:
-        shift = shift.unsqueeze(-1)
+    inv_shift = shift.reciprocal()
+    scale = inv_shift.abs().max()
+    inv_shift = inv_shift.div(scale)
 
-    right = low_rank_mat.transpose(-1, -2).matmul(woodbury_factor.matmul(vector / shift))
-    return (vector - right) / shift
+    if vector.ndimension() > 1:
+        inv_shift = inv_shift.unsqueeze(-1)
+
+    shifted_vector = inv_shift * vector
+    diff = inv_shift * (low_rank_mat.transpose(-1, -2) @ woodbury_factor @ shifted_vector)
+    res = shifted_vector - diff
+    res = res.mul(scale)
+    return res
