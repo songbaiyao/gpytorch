@@ -118,12 +118,12 @@ class TestSimpleGPRegression(unittest.TestCase):
     def test_posterior_latent_gp_and_likelihood_with_optimization(self, cuda=False):
         train_x, test_x, train_y, test_y = self._get_data(cuda=cuda)
         # We're manually going to set the hyperparameters to something they shouldn't be
-        likelihood = GaussianLikelihood(noise_prior=SmoothedBoxPrior(exp(-3), exp(3), sigma=0.1))
+        likelihood = GaussianLikelihood()
         gp_model = ExactGPModel(train_x, train_y, likelihood)
         mll = gpytorch.ExactMarginalLogLikelihood(likelihood, gp_model)
         gp_model.covar_module.base_kernel.initialize(log_lengthscale=1)
         gp_model.mean_module.initialize(constant=0)
-        likelihood.initialize(log_noise=1)
+        likelihood.initialize(raw_noise=-20)
 
         if cuda:
             gp_model.cuda()
@@ -132,9 +132,10 @@ class TestSimpleGPRegression(unittest.TestCase):
         # Find optimal model hyperparameters
         gp_model.train()
         likelihood.train()
-        optimizer = optim.Adam(list(gp_model.parameters()) + list(likelihood.parameters()), lr=0.15)
+        optimizer = optim.Adam(list(gp_model.parameters()), lr=0.15)
         optimizer.n_iter = 0
         for _ in range(50):
+            print(likelihood.noise)
             optimizer.zero_grad()
             with gpytorch.settings.debug(False):
                 output = gp_model(train_x)

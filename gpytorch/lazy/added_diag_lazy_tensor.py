@@ -34,6 +34,7 @@ class AddedDiagLazyTensor(SumLazyTensor):
             self._lazy_tensor = lazy_tensors[0]
         else:
             raise RuntimeError("One of the LazyTensors input to AddedDiagLazyTensor must be a DiagLazyTensor!")
+        print(self.evaluate().symeig()[0])
 
     def add_diag(self, added_diag):
         return AddedDiagLazyTensor(self._lazy_tensor, self._diag_tensor.add_diag(added_diag))
@@ -62,9 +63,12 @@ class AddedDiagLazyTensor(SumLazyTensor):
 
         # preconditioner
         def precondition_closure(tensor):
-            return pivoted_cholesky.woodbury_solve(
+            res = pivoted_cholesky.woodbury_solve(
                 tensor, self._piv_chol_self, self._woodbury_cache, self._diag_tensor.diag()
             )
+            result = self._piv_chol_self.transpose(-1, -2) @ self._piv_chol_self @ res + self._diag_tensor.matmul(res)
+            print(f'shape: {result.shape} \t diff: {torch.norm(tensor - result).item()}')
+            return res
 
         # log_det correction
         if not hasattr(self, "_precond_log_det_cache"):
@@ -76,7 +80,12 @@ class AddedDiagLazyTensor(SumLazyTensor):
                 ld_one = (NonLazyTensor(torch.cholesky(lr_flipped, upper=True)).diag().log().sum(-1)) * 2
                 ld_two = self._diag_tensor.diag().log().sum(-1)
             else:
-                ld_one = lr_flipped.cholesky(upper=True).diag().log().sum() * 2
+                # Hack for half precision - switch over to float (because potrs is not supported for half)
+                if lr_flipped.dtype == torch.float16:
+                    ld_one = lr_flipped.float().cholesky(upper=True).diag().log().sum() * 2
+                    ld_one = ld_one.type_as(lr_flipped)
+                else:
+                    ld_one = lr_flipped.cholesky(upper=True).diag().log().sum() * 2
                 ld_two = self._diag_tensor.diag().log().sum().item()
             self._precond_log_det_cache = ld_one + ld_two
 
