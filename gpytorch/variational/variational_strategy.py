@@ -3,7 +3,7 @@
 import math
 import torch
 from .. import beta_features
-from ..lazy import DiagLazyTensor, NonLazyTensor, PsdSumLazyTensor, RootLazyTensor
+from ..lazy import DiagLazyTensor, CachedCGLazyTensor, NonLazyTensor, PsdSumLazyTensor, RootLazyTensor
 from ..module import Module
 from ..distributions import MultivariateNormal
 
@@ -102,6 +102,7 @@ class VariationalStrategy(Module):
 
             # Compute all products with `induc_induc_covar^{-1}` simultaneously
             eager_rhs = torch.cat([mean_diff, induc_data_covar, root_variational_covar.transpose(-1, -2)], -1)
+            induc_induc_covar = CachedCGLazyTensor(induc_induc_covar, eager_rhs.detach())
             inv_products = induc_induc_covar.inv_matmul(induc_data_covar, eager_rhs.transpose(-1, -2))
 
             # Cache the prior distribution, for faster training
