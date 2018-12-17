@@ -57,7 +57,11 @@ class CachedCGLazyTensor(LazyTensor):
     def _quad_form_derivative(self, left_vecs, right_vecs):
         return self.base_lazy_tensor._quad_form_derivative(left_vecs, right_vecs)
 
-    def _solve(self, rhs, preconditioner):
+    def _solve(self, rhs, preconditioner, num_tridiag=None):
+        # Temporary
+        if num_tridiag is not None:
+            return super(CachedCGLazyTensor, self)._solve(rhs, preconditioner, num_tridiag=num_tridiag)
+
         # Here we check to see what solves we've already performed
         with torch.no_grad():
             normed_rhs = rhs.view(-1, rhs.size(-1))
