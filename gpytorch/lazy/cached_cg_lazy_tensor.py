@@ -17,7 +17,29 @@ class CachedCGLazyTensor(LazyTensor):
         :attr:`base_lazy_tensor` (:class:`gpytorch.lazy.LazyTensor`): the LazyTensor to wrap
     """
 
-    def __init__(self, base_lazy_tensor, eager_rhs, solves=None, normed_eager_rhs=None):
+    def __init__(
+        self, base_lazy_tensor, eager_rhs, normed_eager_rhs=None, probe_vectors=None, probe_vector_norms=None,
+        solves=None, probe_solves=None, probe_tmats=None, will_compute_logdet=True,
+    ):
+        # Generate some probe vectors if none are supplied
+        if (probe_vectors is None or probe_vector_norms is None):
+            if will_compute_logdet:
+                num_random_probes = settings.num_trace_samples.value()
+                probe_vectors = torch.empty(
+                    base_lazy_tensor.matrix_shape[-1], num_random_probes,
+                    dtype=base_lazy_tensor.dtype, device=base_lazy_tensor.device
+                )
+                probe_vectors.bernoulli_().mul_(2).add_(-1)
+                probe_vector_norms = torch.norm(probe_vectors, 2, dim=-2, keepdim=True)
+                probe_vectors = probe_vectors.expand(
+                    *base_lazy_tensor.batch_shape, base_lazy_tensor.matrix_shape[-1], num_random_probes
+                )
+                probe_vector_norms = probe_vector_norms.expand(*base_lazy_tensor.batch_shape, 1, num_random_probes)
+                probe_vectors = probe_vectors.div(probe_vector_norms)
+            else:
+                probe_vectors = torch.tensor([])
+                probe_vector_norms = torch.tensor([])
+
         # We're precomputing the solves and the normed version of the eager_rhs
         # This will make it faster when we reconstruct the LazyTensor inside functions
         with torch.no_grad():
@@ -26,16 +48,32 @@ class CachedCGLazyTensor(LazyTensor):
                 norm = normed_eager_rhs.norm(2, dim=0, keepdim=True)
                 normed_eager_rhs = normed_eager_rhs.div(norm)
 
-            if solves is None:
-                solves = base_lazy_tensor._solve(eager_rhs, base_lazy_tensor._preconditioner()[0])
+            if (solves is None or probe_solves is None or probe_tmats is None):
+                if will_compute_logdet:
+                    all_solves, probe_tmats = base_lazy_tensor._solve(
+                        torch.cat([probe_vectors, eager_rhs], -1),
+                        base_lazy_tensor._preconditioner()[0],
+                        num_tridiag=probe_vectors.size(-1)
+                    )
+                    probe_solves = all_solves[..., :probe_vectors.size(-1)] * 0 + 1
+                    solves = all_solves[..., probe_vectors.size(-1):]
+                else:
+                    solves = base_lazy_tensor._solve(eager_rhs, base_lazy_tensor._preconditioner()[0], num_tridiag=0)
+                    probe_solves = torch.tensor([])
+                    probe_tmats = torch.tensor([])
 
         super(CachedCGLazyTensor, self).__init__(
-            base_lazy_tensor, eager_rhs=eager_rhs, solves=solves, normed_eager_rhs=normed_eager_rhs
+            base_lazy_tensor, eager_rhs=eager_rhs, normed_eager_rhs=normed_eager_rhs, probe_vectors=probe_vectors,
+            probe_vector_norms=probe_vector_norms, solves=solves, probe_solves=probe_solves, probe_tmats=probe_tmats,
         )
         self.base_lazy_tensor = base_lazy_tensor
         self.eager_rhs = eager_rhs.requires_grad_(False)
-        self.solves = solves.requires_grad_(False)
         self.normed_eager_rhs = normed_eager_rhs.requires_grad_(False)
+        self.probe_vectors = probe_vectors.requires_grad_(False)
+        self.probe_vector_norms = probe_vector_norms.requires_grad_(False)
+        self.solves = solves.requires_grad_(False)
+        self.probe_solves = probe_solves.requires_grad_(False)
+        self.probe_tmats = probe_tmats.requires_grad_(False)
 
     @property
     def requires_grad(self):
