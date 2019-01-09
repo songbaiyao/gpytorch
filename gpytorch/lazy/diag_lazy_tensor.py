@@ -47,24 +47,11 @@ class DiagLazyTensor(LazyTensor):
             passed in, otherwise a `bl x ... bk x i` batch of such tensors, where `l = len(batch_indices) + 1`.
 
         """
-        batch_dims = len(batch_indices)
-        if batch_dims > self.batch_dim:
-            raise RuntimeError(
-                "Received {} batch index tensors, DiagLazyTensor has {} batches".format(batch_dims, self.batch_dim)
-            )
-        full_batch_shape = self._diag.shape[batch_dims:-1]
-        if len(full_batch_shape) == 0:
-            diag_elements = self._diag[batch_indices + (left_indices,)]
-        else:
-            d = torch.ones_like(left_indices)
-            diag_elements = torch.stack(
-                [
-                    self._diag[batch_indices + tuple(j * d for j in js) + (left_indices,)]
-                    for js in product(*[range(b) for b in full_batch_shape])
-                ]
-            )
-        equal_indices = (left_indices == right_indices).type_as(self._diag)
-        return diag_elements * equal_indices
+        diag_elements = self._diag[batch_indices + (left_indices,)]
+        is_on_diagonal = torch.tensor(
+            [0., 1.], dtype=self.dtype, device=self.device
+        ).expand(*self.batch_shape, 2)[batch_indices + ((left_indices == right_indices).long(), )]
+        return diag_elements * is_on_diagonal
 
     def _matmul(self, rhs):
         # to perform matrix multiplication with diagonal matrices we can just

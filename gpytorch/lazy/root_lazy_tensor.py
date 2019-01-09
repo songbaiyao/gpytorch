@@ -41,10 +41,7 @@ class RootLazyTensor(LazyTensor):
         return tuple(deriv)
 
     def _size(self):
-        if self.root.ndimension() > 2:
-            return torch.Size((self.root.size(0), self.root.size(1), self.root.size(1)))
-        else:
-            return torch.Size((self.root.size(0), self.root.size(0)))
+        return torch.Size((*self.root.batch_shape, self.root.size(-2), self.root.size(-2)))
 
     def _transpose_nonbatch(self):
         return self

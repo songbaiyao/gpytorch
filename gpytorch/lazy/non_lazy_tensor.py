@@ -53,11 +53,7 @@ class NonLazyTensor(LazyTensor):
         return torch.matmul(self.tensor.transpose(-1, -2), rhs)
 
     def diag(self):
-        if self.tensor.ndimension() < 3:
-            return self.tensor.diag()
-        else:
-            row_col_iter = torch.arange(0, self.matrix_shape[-1], dtype=torch.long, device=self.device)
-            return self.tensor[..., row_col_iter, row_col_iter].view(*self.batch_shape, -1)
+        return self.tensor.diagonal(dim1=-2, dim2=-1)
 
     def evaluate(self):
         return self.tensor

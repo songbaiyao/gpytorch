@@ -11,6 +11,7 @@ from ..functions._inv_quad_log_det import InvQuadLogDet
 from ..functions._matmul import Matmul
 from ..functions._root_decomposition import RootDecomposition
 from ..utils import linear_cg
+from ..utils.batch import _compute_getitem_size
 from ..utils.broadcasting import _matmul_broadcast_shape
 from ..utils.deprecation import _deprecate_renamed_methods
 from ..utils.memoize import cached
@@ -183,85 +184,93 @@ class LazyTensor(object):
                     "This is potentially a bug in GPyTorch.".format(self.__class__.__name__, len(indices), self.dim())
                 )
 
+        output_shape, first_tsr_idx = _compute_getitem_size(self, indices)
+
+        # Handle index
+        row_index = indices[-2]
+        col_index = indices[-1]
+        batch_indices = indices[:-2]
+
+        # Special case: if both row and col are tensor indexed, then we use _get_indices
+        if torch.is_tensor(row_index) and torch.is_tensor(col_index):
+            return self._get_indices(row_index, col_index, *batch_indices)
+
+        # Other special cases: if either row or col are tensor indexed, we'll use a special version of _get_indices
+        elif torch.is_tensor(row_index):
+            # We're going to make col_index into a tensor index
+            # We'll repeat all other indices to take into account the tensorized col_index
+            col_index = torch.tensor(range(self.size(-1))[col_index], dtype=torch.long, device=self.device)
+            orig_tsr_idx_size, new_tsr_idx_size = row_index.numel(), col_index.numel()
+            col_index = col_index.unsqueeze(-1).repeat(orig_tsr_idx_size, 1).view(-1)
+            row_index = row_index.unsqueeze(-1).repeat(1, new_tsr_idx_size).view(-1)
+            batch_indices = tuple(
+                batch_index.unsqueeze(-1).repeat(
+                    1, new_tsr_idx_size
+                ).view(-1) if torch.is_tensor(batch_index) else batch_index
+                for batch_index in batch_indices
+            )
+            res = self._get_indices(row_index, col_index, *batch_indices)
+
+            # Now we'll make sure that the column elements are in the appropriate location
+            res = res.view(
+                *res.shape[:first_tsr_idx], orig_tsr_idx_size, new_tsr_idx_size, *res.shape[first_tsr_idx + 1:]
+            )
+            res = res.permute(
+                *range(first_tsr_idx), first_tsr_idx, *range(first_tsr_idx + 2, res.dim()), first_tsr_idx + 1
+            )
+            res = res.view(output_shape)
+            return res
+
+        # If the last index if tensor indexed, then we also will use a special version of _get_indices
+        elif torch.is_tensor(col_index): 
+            row_index = torch.tensor(range(self.size(-2))[row_index], dtype=torch.long, device=self.device)
+            orig_tsr_idx_size, new_tsr_idx_size = col_index.numel(), row_index.numel()
+
+            # It's easy if only the last index if batch_indexed
+            if first_tsr_idx == len(output_shape) - 1:
+                row_index = row_index.unsqueeze(-1).repeat(1, orig_tsr_idx_size).view(-1)
+                col_index = col_index.unsqueeze(-1).repeat(new_tsr_idx_size, 1).view(-1)
+                res = self._get_indices(row_index, col_index, *batch_indices)
+                res = res.view(output_shape)
+                return res
+            else:
+                row_index = row_index.unsqueeze(-1).repeat(orig_tsr_idx_size, 1).view(-1)
+                col_index = col_index.unsqueeze(-1).repeat(1, new_tsr_idx_size).view(-1)
+                batch_indices = tuple(
+                    batch_index.unsqueeze(-1).repeat(
+                        1, new_tsr_idx_size
+                    ).view(-1) if torch.is_tensor(batch_index) else batch_index
+                    for batch_index in batch_indices
+                )
+                res = self._get_indices(row_index, col_index, *batch_indices)
+                res = res.view(
+                    *res.shape[:first_tsr_idx], orig_tsr_idx_size, new_tsr_idx_size, *res.shape[first_tsr_idx + 1:]
+                )
+                res = res.permute(
+                    *range(first_tsr_idx), first_tsr_idx, *range(first_tsr_idx + 2, res.dim()), first_tsr_idx + 1
+                )
+                res = res.view(output_shape)
+                return res
+
+        # Handle batch dimensions
         components = list(self._args)
-        indices = list(indices)
+        for i, item in enumerate(components):
+            components[i] = item[batch_indices]
+        new_lazy_tensor = self.__class__(*components, **self._kwargs)
 
         # Normal case if we're indexing the LT with ints or slices
         # Also squeeze dimensions if we're indexing with tensors
         squeeze_left = False
         squeeze_right = False
-        if isinstance(indices[-2], int):
-            indices[-2] = slice(indices[-2], indices[-2] + 1, None)
+        if isinstance(row_index, int):
+            row_index = slice(row_index, row_index + 1, None)
             squeeze_left = True
-        elif torch.is_tensor(indices[-2]):
-            squeeze_left = True
-        if isinstance(indices[-1], int):
-            indices[-1] = slice(indices[-1], indices[-1] + 1, None)
+        if isinstance(col_index, int):
+            col_index = slice(col_index, col_index + 1, None)
             squeeze_right = True
-        elif torch.is_tensor(indices[-1]):
-            squeeze_right = True
-
-        # Handle batch dimensions
-        isbatch = self.dim() >= 3
-        first_tensor_index_dim = None
-        if isbatch:
-            batch_index = tuple(indices[:-2])
-            for i, item in enumerate(components):
-                components[i] = item[batch_index]
-
-            for i, idx in enumerate(batch_index):
-                if torch.is_tensor(idx):
-                    first_tensor_index_dim = i
-                    break
-
-        new_lazy_tensor = self.__class__(*components, **self._kwargs)
-
-        # Handle index
-        left_index = indices[-2]
-        right_index = indices[-1]
-
-        # Special case: if both row and col are not indexed, then we are done
-        if (
-            not torch.is_tensor(left_index)
-            and left_index == slice(None, None, None)
-            and not torch.is_tensor(right_index)
-            and right_index == slice(None, None, None)
-        ):
-            return new_lazy_tensor
-
-        # Special case: if both row and col are tensor indexed, then we use _get_indices
-        if torch.is_tensor(left_index) and torch.is_tensor(right_index):
-            if left_index.numel() != right_index.numel():
-                raise RuntimeError(
-                    "Expected the tensor indices to be the same size: got {} and {}".format(
-                        left_index.numel(), right_index.numel()
-                    )
-                )
-
-            if new_lazy_tensor.ndimension() == 2:
-                return new_lazy_tensor._get_indices(left_index, right_index)
-
-            else:
-                batch_index = torch.arange(0, new_lazy_tensor.size(0), dtype=torch.long, device=self.device)
-                if first_tensor_index_dim is not None:
-                    if batch_index.numel() != left_index.numel():
-                        raise RuntimeError(
-                            "Expected the tensor indices to be the same size: got {}, {} and {}".format(
-                                batch_index.numel(), left_index.numel(), right_index.numel()
-                            )
-                        )
-                    return new_lazy_tensor._get_indices(left_index, right_index, batch_index)
-                else:
-                    batch_size = batch_index.numel()
-                    row_col_size = left_index.numel()
-                    batch_index = batch_index.unsqueeze(1).repeat(1, row_col_size).view(-1)
-                    left_index = left_index.unsqueeze(1).repeat(batch_size, 1).view(-1)
-                    right_index = right_index.unsqueeze(1).repeat(batch_size, 1).view(-1)
-                    res = new_lazy_tensor._get_indices(left_index, right_index, batch_index)
-                    return res.view(batch_size, row_col_size)
 
         # Normal case: we have to do some processing on eithe rthe rows or columns
-        res = new_lazy_tensor._getitem_nonbatch(left_index, right_index, first_tensor_index_dim)
+        res = new_lazy_tensor._getitem_nonbatch(row_index, col_index)
         if (squeeze_left or squeeze_right) and isinstance(res, LazyTensor):
             res = res.evaluate()
         if squeeze_left:
@@ -300,19 +309,9 @@ class LazyTensor(object):
             left_interp_indices.unsqueeze_(0)
             right_interp_indices.unsqueeze_(0)
 
-        if first_tensor_index_dim is not None and torch.is_tensor(row_index):
-            view_size = [1] * ndimension
-            view_size[first_tensor_index_dim] = left_interp_indices.numel()
-            left_interp_indices = left_interp_indices.view(*view_size).expand(*(batch_sizes + [1, 1]))
-        else:
-            left_interp_indices = left_interp_indices.expand(*(batch_sizes + [left_interp_len, 1]))
+        left_interp_indices = left_interp_indices.expand(*(batch_sizes + [left_interp_len, 1]))
         left_interp_values = torch.ones(left_interp_indices.size(), dtype=self.dtype, device=self.device)
-        if first_tensor_index_dim is not None and torch.is_tensor(col_index):
-            view_size = [1] * ndimension
-            view_size[first_tensor_index_dim] = right_interp_indices.numel()
-            right_interp_indices = right_interp_indices.view(*view_size).expand(*(batch_sizes + [1, 1]))
-        else:
-            right_interp_indices = right_interp_indices.expand(*(batch_sizes + [right_interp_len, 1]))
+        right_interp_indices = right_interp_indices.expand(*(batch_sizes + [right_interp_len, 1]))
         right_interp_values = torch.ones(right_interp_indices.size(), dtype=self.dtype, device=self.device)
 
         res = InterpolatedLazyTensor(
@@ -432,34 +431,10 @@ class LazyTensor(object):
         from .diag_lazy_tensor import DiagLazyTensor
         from .added_diag_lazy_tensor import AddedDiagLazyTensor
 
-        if self.size(-1) != self.size(-2):
+        if not self.is_square:
             raise RuntimeError("add_diag only defined for square matrices")
 
-        # Expand things the correct way
-        if self.ndimension() == 3:
-            if diag.dim() == 0:
-                diag = diag.view(1, 1).expand(self.size(0), self.size(1))
-            elif diag.dim() == 1:
-                diag = diag.unsqueeze(0).expand(self.size(0), self.size(1))
-            elif diag.ndimension() == 2:
-                diag = diag.expand(self.size(0), self.size(1))
-            else:
-                raise RuntimeError(
-                    "For a 3D tensor ({}), add_diag expects a 1D or 2D diag. "
-                    "Got size ({})".format(self.size(), diag.size())
-                )
-        else:
-            if diag.dim() == 0:
-                diag = diag.view(1).expand(self.size(0))
-            elif diag.dim() == 1:
-                diag = diag.expand(self.size(0))
-            else:
-                raise RuntimeError(
-                    "For a 2D tensor ({}), add_diag expects a 0D or 1D diag. "
-                    "Got size ({})".format(self.size(), diag.size())
-                )
-
-        diag_lazy_tsr = DiagLazyTensor(diag)
+        diag_lazy_tsr = DiagLazyTensor(diag.expand(self.shape[:-1]))
         return AddedDiagLazyTensor(self, diag_lazy_tsr)
 
     def add_jitter(self, jitter_val=1e-3):

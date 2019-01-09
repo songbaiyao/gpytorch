@@ -255,7 +255,7 @@ class RectangularLazyTensorTestCase(object):
         # Batch case
         else:
             for batch_index in product(
-                [torch.tensor([0, 1, 1, 0]), slice(None, None, None)], repeat=(lazy_tensor.dim() - 2)
+                [torch.tensor([0, 1, 1, 0]), torch.tensor([1, 0, 0, 1])], repeat=(lazy_tensor.dim() - 2)
             ):
                 index = (*batch_index, torch.tensor([0, 1, 0, 2]), torch.tensor([1, 2, 0, 1]))
                 res, actual = lazy_tensor[index], evaluated[index]
@@ -562,7 +562,7 @@ class LazyTensorTestCase(RectangularLazyTensorTestCase):
         evaluated = self.evaluate_lazy_tensor(lazy_tensor)
         flattened_evaluated = evaluated.view(-1, *lazy_tensor.matrix_shape)
 
-        vecs = torch.randn(*lazy_tensor.batch_shape, lazy_tensor.size(1), 3, requires_grad=True)
+        vecs = torch.randn(*lazy_tensor.batch_shape, lazy_tensor.size(-1), 3, requires_grad=True)
         vecs_copy = vecs.clone().detach_().requires_grad_(True)
 
         with gpytorch.settings.num_trace_samples(128):
@@ -584,7 +584,7 @@ class LazyTensorTestCase(RectangularLazyTensorTestCase):
         evaluated = self.evaluate_lazy_tensor(lazy_tensor)
         flattened_evaluated = evaluated.view(-1, *lazy_tensor.matrix_shape)
 
-        vecs = torch.randn(*lazy_tensor.batch_shape, lazy_tensor.size(1), 3, requires_grad=True)
+        vecs = torch.randn(*lazy_tensor.batch_shape, lazy_tensor.size(-1), 3, requires_grad=True)
         vecs_copy = vecs.clone().detach_().requires_grad_(True)
 
         with gpytorch.settings.num_trace_samples(128):
