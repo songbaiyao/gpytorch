@@ -88,15 +88,14 @@ def woodbury_factor(low_rank_mat, shift):
     .. math::
 
         \begin{equation*}
-            R = (I_k + 1/shift VV')^{-1}V
+            R = (I_k + V (1/shift) V')^{-1}V * q
         \end{equation*}
 
     to be used in solves with (V'V + shift I) via the Woodbury formula
     """
-    k = low_rank_mat.size(-2)
     shifted_mat = low_rank_mat.matmul(low_rank_mat.transpose(-1, -2) / shift.unsqueeze(-1))
 
-    shifted_mat = shifted_mat + torch.eye(k, dtype=shifted_mat.dtype, device=shifted_mat.device)
+    shifted_mat.diagonal(dim1=-1, dim2=-2).add_(1)
 
     R = torch.potrs(low_rank_mat, torch.cholesky(shifted_mat, upper=True))
     return R
@@ -116,5 +115,7 @@ def woodbury_solve(vector, low_rank_mat, woodbury_factor, shift):
     if vector.ndimension() > 1:
         shift = shift.unsqueeze(-1)
 
-    right = low_rank_mat.transpose(-1, -2).matmul(woodbury_factor.matmul(vector / shift))
-    return (vector - right) / shift
+    right = torch.chain_matmul(low_rank_mat.transpose(-1, -2), woodbury_factor, vector / shift)
+    # right = low_rank_mat.transpose(-1, -2).matmul(woodbury_factor.matmul(vector / shift))
+    res = torch.sub(vector, right, out=right).div_(shift)
+    return res

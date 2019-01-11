@@ -46,6 +46,11 @@ class AddedDiagLazyTensor(SumLazyTensor):
         else:
             return AddedDiagLazyTensor(self._lazy_tensor + other, self._diag_tensor)
 
+    def _matmul(self, rhs):
+        res = self._lazy_tensor._matmul(rhs)
+        res = res.addcmul_(self._diag_tensor._diag.unsqueeze(-1), rhs)
+        return res
+
     def _preconditioner(self):
         if settings.max_preconditioner_size.value() == 0:
             return None, None

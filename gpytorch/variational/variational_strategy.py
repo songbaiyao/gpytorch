@@ -181,11 +181,6 @@ class VariationalStrategy(Module):
                 self._prior_distribution_memo = prior_dist
                 self._variational_distribution_memo = variational_dist
 
-            # Compute predictive mean/covariance
-            predictive_mean = torch.add(
-                test_mean,
-                induc_induc_covar.inv_matmul(mean_diff, induc_data_covar.transpose(-1, -2)).squeeze(-1)
-            )
             if settings.fast_computations.mvn_kl_trace.on():
                 predictive_covar = SymmetricKernelInterpolatedLazyTensor(
                     variational_covar, induc_induc_covar, induc_data_covar.transpose(-1, -2),
@@ -205,6 +200,12 @@ class VariationalStrategy(Module):
                 interp_data_data_var = induc_induc_covar.inv_quad(induc_data_covar, reduce_inv_quad=False)
                 diag_correction = DiagLazyTensor((data_data_covar.diag() - interp_data_data_var).clamp(0, math.inf))
                 predictive_covar = PsdSumLazyTensor(predictive_covar, diag_correction)
+
+            # Compute predictive mean/covariance
+            predictive_mean = torch.add(
+                test_mean,
+                induc_induc_covar.inv_matmul(mean_diff, induc_data_covar.transpose(-1, -2)).squeeze(-1)
+            )
 
             return MultivariateNormal(predictive_mean, predictive_covar)
 

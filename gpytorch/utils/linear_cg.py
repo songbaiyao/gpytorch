@@ -78,9 +78,9 @@ def linear_cg(
     # residual: residual_{0} = b_vec - lhs x_{0}
     residual = rhs - matmul_closure(result)
 
-    # Check for NaNs
-    if not torch.equal(residual, residual):
-        raise RuntimeError("NaNs encounterd when trying to perform matrix-vector multiplication")
+    # # Check for NaNs
+    # if not torch.equal(residual, residual):
+    #     raise RuntimeError("NaNs encounterd when trying to perform matrix-vector multiplication")
 
     # Sometime we're lucky and the preconditioner solves the system right away
     residual_norm = residual.norm(2, dim=-2)
@@ -120,34 +120,36 @@ def linear_cg(
         alpha.add_(eps)
         torch.div(residual_inner_prod, alpha, out=alpha)
 
-        # Update result
-        # result_{k} = result_{k-1} + alpha_{k} p_vec_{k-1}
-        torch.addcmul(result, alpha, curr_conjugate_vec, out=result)
-
         # Update residual
         # residual_{k} = residual_{k-1} - alpha_{k} mat p_vec_{k-1}
         torch.addcmul(residual, -1, alpha, mvms, out=residual)
 
-        # If residual are sufficiently small, then exit loop
-        # Alternatively, exit if this is our last iteration
-        torch.norm(residual, 2, dim=-2, out=residual_norm)
-        if (residual_norm < tolerance).all() and not (n_tridiag and k < n_tridiag_iter):
-            break
+        # Update result
+        # result_{k} = result_{k-1} + alpha_{k} p_vec_{k-1}
+        torch.addcmul(result, alpha, curr_conjugate_vec, out=result)
+
+        # beta_{k} = (precon_residual{k}^T r_vec_{k}) / (precon_residual{k-1}^T r_vec_{k-1})
+        residual_inner_prod.add_(eps)
+        torch.reciprocal(residual_inner_prod, out=beta)
 
         # Update precond_residual
         # precon_residual{k} = M^-1 residual_{k}
         precond_residual = preconditioner(residual)
 
-        # beta_{k} = (precon_residual{k}^T r_vec_{k}) / (precon_residual{k-1}^T r_vec_{k-1})
-        residual_inner_prod.add_(eps)
-        torch.reciprocal(residual_inner_prod, out=beta)
+        # If residual are sufficiently small, then exit loop
+        # Alternatively, exit if this is our last iteration
+        # torch.norm(residual, 2, dim=-2, out=residual_norm)
+
+        # if (residual_norm < tolerance).all() and not (n_tridiag and k < n_tridiag_iter):
+        #     break
+
         torch.mul(residual, precond_residual, out=mul_storage)
         torch.sum(mul_storage, -2, keepdim=True, out=residual_inner_prod)
         beta.mul_(residual_inner_prod)
 
         # Update curr_conjugate_vec
         # curr_conjugate_vec_{k} = precon_residual{k} + beta_{k} curr_conjugate_vec_{k-1}
-        curr_conjugate_vec.mul_(beta).add_(precond_residual)
+        torch.addcmul(precond_residual, curr_conjugate_vec, beta, out=curr_conjugate_vec)
 
         # Update tridiagonal matrices, if applicable
         if n_tridiag and k < n_tridiag_iter and update_tridiag:
