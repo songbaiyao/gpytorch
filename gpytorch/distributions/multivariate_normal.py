@@ -106,6 +106,9 @@ class _MultivariateNormalBase(TMultivariateNormal, Distribution):
             return lazify(super(_MultivariateNormalBase, self).covariance_matrix)
 
     def log_prob(self, value):
+        if settings.fast_computations.log_prob.off():
+            return super().log_prob(value)
+
         if self._validate_args:
             self._validate_sample(value)
 
@@ -120,9 +123,9 @@ class _MultivariateNormalBase(TMultivariateNormal, Distribution):
             )
 
         # Get log determininat and first part of quadratic form
-        inv_quad, log_det = covar.inv_quad_log_det(inv_quad_rhs=diff.unsqueeze(-1), log_det=True)
+        inv_quad, logdet = covar.inv_quad_logdet(inv_quad_rhs=diff.unsqueeze(-1), logdet=True)
 
-        res = -0.5 * sum([inv_quad, log_det, diff.size(-1) * math.log(2 * math.pi)])
+        res = -0.5 * sum([inv_quad, logdet, diff.size(-1) * math.log(2 * math.pi)])
         return res
 
     def rsample(self, sample_shape=torch.Size(), base_samples=None):
@@ -231,15 +234,15 @@ def kl_mvn_mvn(p_dist, q_dist):
     p_covar = p_dist.lazy_covariance_matrix
     root_p_covar = p_covar.root_decomposition().root.evaluate()
 
-    mean_diffs = q_mean - p_mean
+    mean_diffs = p_mean - q_mean
     if isinstance(root_p_covar, LazyTensor):
         # right now this just catches if root_p_covar is a DiagLazyTensor,
         # but we may want to be smarter about this in the future
         root_p_covar = root_p_covar.evaluate()
     inv_quad_rhs = torch.cat([mean_diffs.unsqueeze(-1), root_p_covar], -1)
-    log_det_p_covar = p_covar.log_det()
-    trace_plus_inv_quad_form, log_det_q_covar = q_covar.inv_quad_log_det(inv_quad_rhs=inv_quad_rhs, log_det=True)
+    logdet_p_covar = p_covar.logdet()
+    trace_plus_inv_quad_form, logdet_q_covar = q_covar.inv_quad_logdet(inv_quad_rhs=inv_quad_rhs, logdet=True)
 
     # Compute the KL Divergence.
-    res = 0.5 * sum([log_det_q_covar, log_det_p_covar.mul(-1), trace_plus_inv_quad_form, -float(mean_diffs.size(-1))])
+    res = 0.5 * sum([logdet_q_covar, logdet_p_covar.mul(-1), trace_plus_inv_quad_form, -float(mean_diffs.size(-1))])
     return res
