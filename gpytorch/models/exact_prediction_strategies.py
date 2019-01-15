@@ -438,7 +438,7 @@ class InterpolatedPredictionStrategy(DefaultPredictionStrategy):
     def exact_predictive_mean(self, test_mean, test_train_covar):
         precomputed_cache = self.mean_cache
 
-        test_train_covar = test_train_covar.evaluate_kernel()
+        test_train_covar = test_train_covar
 
         test_interp_indices = test_train_covar.left_interp_indices
         test_interp_values = test_train_covar.left_interp_values
@@ -449,7 +449,7 @@ class InterpolatedPredictionStrategy(DefaultPredictionStrategy):
         if settings.fast_pred_var.off() and settings.fast_pred_samples.off():
             return super(InterpolatedPredictionStrategy, self).exact_predictive_covar(test_test_covar, test_train_covar)
 
-        test_train_covar = test_train_covar.evaluate_kernel()
+        test_train_covar = test_train_covar
         self._last_test_train_covar = test_train_covar
         test_test_covar = test_test_covar.evaluate_kernel()
 

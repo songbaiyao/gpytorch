@@ -144,7 +144,7 @@ class ExactGP(GP):
             self.prediction_strategy = None
         return super(ExactGP, self).train(mode)
 
-    def __call__(self, *args, **kwargs):
+    def __call__(self, *args, compute_covar=True, **kwargs):
         train_inputs = list(self.train_inputs) if self.train_inputs is not None else []
         inputs = list(i.unsqueeze(-1) if i.ndimension() == 1 else i for i in args)
 
@@ -258,9 +258,13 @@ class ExactGP(GP):
 
             test_mean = full_mean.narrow(-1, train_targets.size(-1), full_mean.size(-1) - train_targets.size(-1))
             test_test_covar = full_covar[..., num_train:, num_train:]
-            test_train_covar = full_covar[..., num_train:, :num_train]
+            test_train_covar = full_covar[..., num_train:, :num_train].evaluate_kernel()
 
             predictive_mean = self.prediction_strategy.exact_predictive_mean(test_mean, test_train_covar)
+
+            if not compute_covar:
+                return predictive_mean
+
             predictive_covar = self.prediction_strategy.exact_predictive_covar(test_test_covar, test_train_covar)
 
             if num_tasks > 1:
