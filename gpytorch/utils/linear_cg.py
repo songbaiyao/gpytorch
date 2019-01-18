@@ -41,7 +41,6 @@ def linear_cg(
       result - a solution to the system (if n_tridiag is 0)
       result, tridiags - a solution to the system, and corresponding tridiagonal matrices (if n_tridiag > 0)
     """
-    raise RuntimeError
     # Unsqueeze, if necesasry
     is_vector = rhs.ndimension() == 1
     if is_vector:

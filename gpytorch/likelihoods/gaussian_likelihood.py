@@ -82,9 +82,14 @@ class GaussianLikelihood(_GaussianLikelihoodBase):
                 raise RuntimeError("With batch_size > 1, expected a batched MultivariateNormal distribution.")
             noise = noise.squeeze(0)
 
+
         res = -0.5 * ((target - mean) ** 2 + variance) / noise
         res += -0.5 * noise.log() - 0.5 * math.log(2 * math.pi)
         return res.sum(-1)
+        # from IPython.core.debugger import set_trace
+        # set_trace()
+        # from torch.distributions import Normal
+        # return Normal(mean, (variance + noise).sqrt()).log_prob(target).sum(-1) # res.sum(-1)
 
     def pyro_sample_y(self, variational_dist_f, y_obs, sample_shape, name_prefix=""):
         import pyro

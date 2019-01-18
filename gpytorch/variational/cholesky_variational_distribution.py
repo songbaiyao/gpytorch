@@ -37,7 +37,7 @@ class CholeskyVariationalDistribution(VariationalDistribution):
     def initialize_variational_distribution(self, prior_dist):
         # self.variational_mean.data.fill_(0)  # No initial difference between prior/variational means
         # self.chol_variational_covar.data.copy_(
-            # prior_dist.lazy_covariance_matrix.add_jitter().evaluate().inverse().cholesky()
+        #     prior_dist.lazy_covariance_matrix.add_jitter().evaluate().inverse().cholesky()
         # )
         pass
 
