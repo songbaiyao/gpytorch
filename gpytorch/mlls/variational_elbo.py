@@ -5,7 +5,7 @@ from .marginal_log_likelihood import MarginalLogLikelihood
 from .. import settings
 
 
-class WhitenedVariationalELBO(MarginalLogLikelihood):
+class VariationalELBO(MarginalLogLikelihood):
     def __init__(self, likelihood, model, num_data, combine_terms=True):
         """
         A special MLL designed for variational inference
@@ -16,7 +16,7 @@ class WhitenedVariationalELBO(MarginalLogLikelihood):
         - num_data: (int) - the total number of training data points (necessary for SGD)
         - combine_terms: (bool) - whether or not to sum the expected NLL with the KL terms (default True)
         """
-        super(WhitenedVariationalELBO, self).__init__(likelihood, model)
+        super(VariationalELBO, self).__init__(likelihood, model)
         self.combine_terms = combine_terms
         self.num_data = num_data
 
@@ -42,7 +42,9 @@ class WhitenedVariationalELBO(MarginalLogLikelihood):
             (variational_dist_u.covariance_matrix * prior_dist.covariance_matrix).view(
                 *prior_dist.batch_shape, -1
             ).sum(-1),
-            # m^T K^-1 m = (m^T K^1) K (K^1 m) = (var_dist_mean)^T K (var_dist_mean)
+            # (m - \mu u)^T K^-1 (m - \mu u)
+            # = (K^-1 (m - \mu u)) K (K^1 (m - \mu u))
+            # = (var_dist_mean)^T K (var_dist_mean)
             (variational_dist_u.mean * (prior_dist.lazy_covariance_matrix @ variational_dist_u.mean)).sum(-1),
             # d
             -prior_dist.event_shape.numel()
@@ -68,6 +70,7 @@ class WhitenedVariationalELBO(MarginalLogLikelihood):
             return log_likelihood, kl_divergence, log_prior.div(self.num_data)
 
 
+'''
 class VariationalELBO(MarginalLogLikelihood):
     def __init__(self, likelihood, model, num_data, combine_terms=True):
         """
@@ -115,6 +118,7 @@ class VariationalELBO(MarginalLogLikelihood):
             for _, prior, closure, _ in self.named_priors():
                 log_prior.add_(prior.log_prob(closure()).sum())
             return log_likelihood, kl_divergence, log_prior.div(self.num_data)
+'''
 
 
 class VariationalELBOEmpirical(VariationalELBO):

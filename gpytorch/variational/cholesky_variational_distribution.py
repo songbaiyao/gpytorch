@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 
 import torch
-from ..functions import add_diag
-from ..lazy import lazify, CholLazyTensor
+from ..lazy import CholLazyTensor
 from ..distributions import MultivariateNormal
 from .variational_distribution import VariationalDistribution
 
@@ -51,15 +50,11 @@ class CholeskyVariationalDistribution(VariationalDistribution):
         that the diagonal remains positive.
         """
         chol_variational_covar = self.chol_variational_covar
-        diagonal = lazify(chol_variational_covar).diag()
         dtype = chol_variational_covar.dtype
         device = chol_variational_covar.device
 
         # First make the cholesky factor is upper triangular
-        # And has a positive diagonal
         lower_mask = torch.ones(self.chol_variational_covar.shape[-2:], dtype=dtype, device=device).tril(0)
-        # diagonal = torch.nn.functional.softplus(diagonal)
-        # chol_variational_covar = add_diag(chol_variational_covar.mul(strictly_lower_mask), diagonal)
         chol_variational_covar = chol_variational_covar.mul(lower_mask)
 
         # Now construct the actual matrix

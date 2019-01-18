@@ -21,10 +21,6 @@ class CholLazyTensor(RootLazyTensor):
         # Run super constructor
         super(CholLazyTensor, self).__init__(chol)
 
-        # Check that the diagonal is
-        # if not torch.equal(self._chol_diag.abs(), self._chol_diag):
-            # raise RuntimeError("The diagonal of the cholesky decomposition should be positive.")
-
     @property
     def _chol(self):
         if not hasattr(self, "_chol_memo"):
