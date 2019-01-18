@@ -59,14 +59,14 @@ class TestSVGPRegression(unittest.TestCase):
         train_x, train_y = train_data()
         likelihood = GaussianLikelihood()
         model = SVGPRegressionModel(torch.linspace(0, 1, 25))
-        mll = gpytorch.mlls.VariationalELBO(likelihood, model, num_data=len(train_y))
+        mll = gpytorch.mlls.WhitenedVariationalELBO(likelihood, model, num_data=len(train_y))
 
         # Find optimal model hyperparameters
         model.train()
         likelihood.train()
-        optimizer = optim.Adam([{"params": model.parameters()}, {"params": likelihood.parameters()}], lr=0.01)
+        optimizer = optim.Adam([{"params": model.parameters()}, {"params": likelihood.parameters()}], lr=0.1)
         with gpytorch.settings.skip_logdet_forward(skip_logdet_forward):
-            for _ in range(170):
+            for _ in range(100):
                 optimizer.zero_grad()
                 output = model(train_x)
                 loss = -mll(output, train_y)

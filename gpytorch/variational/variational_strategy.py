@@ -3,7 +3,7 @@
 import math
 import torch
 from .. import beta_features, settings
-from ..lazy import DiagLazyTensor, CachedCGLazyTensor, PsdSumLazyTensor, RootLazyTensor
+from ..lazy import DiagLazyTensor, CachedCGLazyTensor, PsdSumLazyTensor, RootLazyTensor, MatmulLazyTensor
 from ..module import Module
 from ..distributions import MultivariateNormal
 
@@ -66,6 +66,12 @@ class VariationalStrategy(Module):
             out = self.model.forward(self.inducing_points)
             return MultivariateNormal(out.mean, out.lazy_covariance_matrix.evaluate_kernel().add_jitter())
 
+    def prior_covar_logdet(self):
+        if hasattr(self, "_logdet_memo"):
+            return self._logdet_memo
+        else:
+            return self.prior_distribution.lazy_covariance_matrix.logdet()
+
     def forward(self, x):
         """
         The :func:`~gpytorch.variational.VariationalStrategy.forward` method determines how to marginalize out the
@@ -94,58 +100,38 @@ class VariationalStrategy(Module):
 
             # Mean terms
             test_mean = full_mean[..., num_induc:]
-            induc_mean = full_mean[..., :num_induc]
-            var_dist_mean = variational_dist.mean
-            mean_diff = (var_dist_mean - induc_mean).unsqueeze(-1)
 
             # Covariance terms
             induc_induc_covar = full_covar[..., :num_induc, :num_induc].evaluate_kernel().add_jitter()
             induc_data_covar = full_covar[..., :num_induc, num_induc:].evaluate()
             data_data_covar = full_covar[..., num_induc:, num_induc:]
-            root_variational_covar = variational_dist.lazy_covariance_matrix.root_decomposition().root.evaluate()
-
-            # Cache the CG results
-            left_tensors = torch.cat([mean_diff, root_variational_covar], -1)
-            with torch.no_grad():
-                eager_rhs = torch.cat([left_tensors, induc_data_covar], -1)
-                solve, probe_vecs, probe_vec_norms, probe_vec_solves, tmats = CachedCGLazyTensor.precompute_terms(
-                    induc_induc_covar, eager_rhs.detach(), logdet_terms=self.training,
-                    include_tmats=(not settings.skip_logdet_forward.on())
-                )
-                eager_rhss = [
-                    eager_rhs.detach(), eager_rhs[..., left_tensors.size(-1):].detach(),
-                    eager_rhs[..., :left_tensors.size(-1)].detach()
-                ]
-                solves = [
-                    solve.detach(), solve[..., left_tensors.size(-1):].detach(),
-                    solve[..., :left_tensors.size(-1)].detach()
-                ]
-                if settings.skip_logdet_forward.on():
-                    eager_rhss.append(torch.cat([probe_vecs, left_tensors], -1))
-                    solves.append(torch.cat([probe_vec_solves, solve[..., :left_tensors.size(-1)]], -1))
-            induc_induc_covar = CachedCGLazyTensor(
-                induc_induc_covar, eager_rhss=eager_rhss, solves=solves, probe_vectors=probe_vecs,
-                probe_vector_norms=probe_vec_norms, probe_vector_solves=probe_vec_solves,
-                probe_vector_tmats=tmats,
-            )
 
             # Cache the prior distribution, for faster training
-            if self.training:
-                prior_dist = MultivariateNormal(induc_mean, induc_induc_covar)
-                self._prior_distribution_memo = prior_dist
 
             # Compute predictive mean/covariance
-            inv_products = induc_induc_covar.inv_matmul(induc_data_covar, left_tensors.transpose(-1, -2))
-            predictive_mean = torch.add(test_mean, inv_products[..., 0, :])
-            predictive_covar = RootLazyTensor(inv_products[..., 1:, :].transpose(-1, -2))
+            predictive_mean = torch.add(test_mean, induc_data_covar.transpose(-1, -2) @ variational_dist.mean)
+            if isinstance(variational_dist.lazy_covariance_matrix, RootLazyTensor):
+                predictive_covar = RootLazyTensor(
+                    (variational_dist.lazy_covariance_matrix.root.transpose(-1, -2) @ induc_data_covar).transpose(-1, -2)
+                )
+            else:
+                predictive_covar = MatmulLazyTensor(
+                    induc_data_covar.transpose(-1, -2),
+                    predictive_covar @ induc_data_covar
+                )
 
-            # Compute a diagonal correction for the covariance. It is the diagonal of the Schur complement
-            # K_{data,data} - K_{data,induc} K_{induc,induc}^{-1} K_{induc,data}
-            if beta_features.diagonal_correction.on():
-                # interp_data_data_var = diag(K_{data,induc} K_{induc,induc}^{-1} K_{induc,data})
-                interp_data_data_var = induc_induc_covar.inv_quad(induc_data_covar, reduce_inv_quad=False)
-                diag_correction = DiagLazyTensor((data_data_covar.diag() - interp_data_data_var).clamp(0, math.inf))
-                predictive_covar = PsdSumLazyTensor(predictive_covar, diag_correction)
+            interp_data_data_var, logdet = induc_induc_covar.inv_quad_logdet(
+                induc_data_covar, logdet=(self.training), reduce_inv_quad=False
+            )
+            diag_correction = DiagLazyTensor((data_data_covar.diag() - interp_data_data_var).clamp(0, math.inf))
+            predictive_covar = PsdSumLazyTensor(predictive_covar, diag_correction)
+
+            # Save the logdet, prior distribution for the ELBO
+            if self.training:
+                induc_mean = full_mean[..., :num_induc]
+                prior_dist = MultivariateNormal(induc_mean, induc_induc_covar)
+                self._prior_distribution_memo = prior_dist
+                self._logdet_memo = logdet
 
             return MultivariateNormal(predictive_mean, predictive_covar)
 
@@ -153,4 +139,9 @@ class VariationalStrategy(Module):
         if not self.variational_params_initialized.item():
             self.variational_distribution.initialize_variational_distribution(self.prior_distribution)
             self.variational_params_initialized.fill_(1)
+        if self.training:
+            if hasattr(self, "_prior_distribution_memo"):
+                del self._prior_distribution_memo
+            if hasattr(self, "_logdet_memo"):
+                del self._logdet_memo
         return super(VariationalStrategy, self).__call__(x)

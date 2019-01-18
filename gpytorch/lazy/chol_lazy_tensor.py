@@ -4,6 +4,7 @@ import torch
 
 from .lazy_tensor import LazyTensor
 from .root_lazy_tensor import RootLazyTensor
+from .. import settings
 
 
 class CholLazyTensor(RootLazyTensor):
@@ -12,16 +13,17 @@ class CholLazyTensor(RootLazyTensor):
             chol = chol.evaluate()
 
         # Check that we have a lower triangular matrix
-        mask = torch.ones(chol.shape[-2:], dtype=chol.dtype, device=chol.device).triu_(1)
-        if torch.max(chol.mul(mask)).item() > 1e-3 and torch.equal(chol, chol):
-            raise RuntimeError("CholLazyVaraiable should take a lower-triangular " "matrix in the constructor.")
+        if settings.debug.on():
+            mask = torch.ones(chol.shape[-2:], dtype=chol.dtype, device=chol.device).triu_(1)
+            if torch.max(chol.mul(mask)).item() > 1e-3 and torch.equal(chol, chol):
+                raise RuntimeError("CholLazyVaraiable should take a lower-triangular " "matrix in the constructor.")
 
         # Run super constructor
         super(CholLazyTensor, self).__init__(chol)
 
         # Check that the diagonal is
-        if not torch.equal(self._chol_diag.abs(), self._chol_diag):
-            raise RuntimeError("The diagonal of the cholesky decomposition should be positive.")
+        # if not torch.equal(self._chol_diag.abs(), self._chol_diag):
+            # raise RuntimeError("The diagonal of the cholesky decomposition should be positive.")
 
     @property
     def _chol(self):
@@ -53,6 +55,6 @@ class CholLazyTensor(RootLazyTensor):
             )
 
         if logdet:
-            logdet_term = self._chol_diag.log().sum(-1).mul(2)
+            logdet_term = self._chol_diag.pow(2).log().sum(-1)
 
         return inv_quad_term, logdet_term
