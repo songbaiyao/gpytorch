@@ -42,13 +42,34 @@ class VariationalELBO(MarginalLogLikelihood):
             (variational_dist_u.covariance_matrix * prior_dist.covariance_matrix).view(
                 *prior_dist.batch_shape, -1
             ).sum(-1),
+            # variational_dist_u.variance.sum(-1),
             # (m - \mu u)^T K^-1 (m - \mu u)
             # = (K^-1 (m - \mu u)) K (K^1 (m - \mu u))
             # = (var_dist_mean)^T K (var_dist_mean)
             (variational_dist_u.mean * (prior_dist.lazy_covariance_matrix @ variational_dist_u.mean)).sum(-1),
+            # variational_dist_u.mean.norm(2).pow(2),
             # d
             -prior_dist.event_shape.numel()
         ])
+
+        from ..distributions import MultivariateNormal
+        from ..lazy import RootLazyTensor, CholLazyTensor, lazify
+        chol = prior_dist.covariance_matrix
+        try:
+            covar = chol @ variational_dist_u.covariance_matrix @ chol.transpose(-1, -2)
+            other_kl_divergence = torch.distributions.kl.kl_divergence(
+                torch.distributions.MultivariateNormal(
+                    loc=(chol @ variational_dist_u.mean + prior_dist.mean),
+                    covariance_matrix=covar,
+                ),
+                torch.distributions.MultivariateNormal(
+                    loc=(prior_dist.mean),
+                    covariance_matrix=(prior_dist.covariance_matrix),
+                )
+            )
+            print(f"KL divergence: \t calc: {kl_divergence.item()}, \t actual: {other_kl_divergence.item()}")
+        except:
+            print('Whoops', kl_divergence)
 
         if kl_divergence.dim() > log_likelihood.dim():
             kl_divergence = kl_divergence.sum(-1)

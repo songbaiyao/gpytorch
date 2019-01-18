@@ -143,8 +143,25 @@ class VariationalStrategy(Module):
                 interp_data_data_var, logdet = induc_induc_covar.inv_quad_logdet(
                     induc_data_covar, logdet=(self.training), reduce_inv_quad=False
                 )
+                # chol_prior_covar = induc_induc_covar.evaluate().double().cholesky(upper=True).type_as(test_mean)
+                # a_matrix = torch.trtrs(
+                    # induc_data_covar.double(), chol_prior_covar.double(), upper=True,
+                # )[0].type_as(test_mean)
+                # print('inv_matmul')
+                # stuff = induc_induc_covar @ (induc_induc_covar.inv_matmul(induc_data_covar)) - induc_data_covar
+                # print("\n\n")
+                # print("Base norm:", induc_data_covar.norm(dim=-2))
+                # print("Chol error:", (induc_induc_covar @ torch.cholesky_solve(induc_data_covar, chol_prior_covar, upper=True) - induc_data_covar).norm(dim=-2) / induc_data_covar.norm(dim=-2))
+                # print("CG error:", (stuff).norm(dim=-2) / induc_data_covar.norm(dim=-2))
+                # print("\n\n")
+                # interp_data_data_var_2 = a_matrix.pow(2).sum(-2)
+                # logdet = induc_induc_covar.logdet()
+                # logdet = chol_prior_covar.diag().pow(2).log().sum()
             diag_correction = DiagLazyTensor((data_data_covar.diag() - interp_data_data_var).clamp(0, math.inf))
             predictive_covar = PsdSumLazyTensor(predictive_covar, diag_correction)
+
+            # print('CG:', interp_data_data_var.view(-1))
+            # print('Chol:', interp_data_data_var_2.view(-1))
 
             # Save the logdet, prior distribution for the ELBO
             if self.training:
