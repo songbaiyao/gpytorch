@@ -30,15 +30,7 @@ class CholLazyTensor(RootLazyTensor):
     @property
     def _chol_diag(self):
         if not hasattr(self, "_chol_diag_memo"):
-            if self._chol.ndimension() == 3:
-                batch_size, diag_size, _ = self._chol.size()
-                batch_index = torch.arange(0, batch_size, dtype=torch.long, device=self.device)
-                batch_index = batch_index.unsqueeze(1).repeat(1, diag_size).view(-1)
-                diag_index = torch.arange(0, diag_size, dtype=torch.long, device=self.device)
-                diag_index = diag_index.unsqueeze(1).repeat(batch_size, 1).view(-1)
-                self._chol_diag_memo = self._chol[batch_index, diag_index, diag_index].view(batch_size, diag_size)
-            else:
-                self._chol_diag_memo = self._chol.diag()
+            self._chol_diag_memo = self._chol.diagonal(dim1=-2, dim2=-1).clone()
         return self._chol_diag_memo
 
     def inv_quad_logdet(self, inv_quad_rhs=None, logdet=False, reduce_inv_quad=True):

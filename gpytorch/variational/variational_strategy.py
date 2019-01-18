@@ -119,7 +119,7 @@ class VariationalStrategy(Module):
             test_mean = full_mean[..., num_induc:]
 
             # Covariance terms
-            induc_induc_covar = full_covar[..., :num_induc, :num_induc].evaluate_kernel().add_jitter()
+            induc_induc_covar = full_covar[..., :num_induc, :num_induc].evaluate_kernel().add_jitter(1e-6)
             induc_data_covar = full_covar[..., :num_induc, num_induc:].evaluate()
             data_data_covar = full_covar[..., num_induc:, num_induc:]
 
