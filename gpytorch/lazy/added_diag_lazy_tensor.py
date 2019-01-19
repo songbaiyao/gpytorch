@@ -46,6 +46,9 @@ class AddedDiagLazyTensor(SumLazyTensor):
         else:
             return AddedDiagLazyTensor(self._lazy_tensor + other, self._diag_tensor)
 
+    def _matmul(self, tensor):
+        return torch.addcmul(self._lazy_tensor._matmul(tensor), self._diag_tensor._diag.unsqueeze(-1), tensor)
+
     def _preconditioner(self):
         if settings.max_preconditioner_size.value() == 0:
             return None, None
