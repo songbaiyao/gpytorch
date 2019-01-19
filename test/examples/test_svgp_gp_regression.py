@@ -55,10 +55,13 @@ class TestSVGPRegression(unittest.TestCase):
         if hasattr(self, "rng_state"):
             torch.set_rng_state(self.rng_state)
 
-    def test_regression_error(self, skip_logdet_forward=False):
-        train_x, train_y = train_data()
+    def test_regression_error(self, skip_logdet_forward=False, cuda=False):
+        train_x, train_y = train_data(cuda=cuda)
         likelihood = GaussianLikelihood()
         model = SVGPRegressionModel(torch.linspace(0, 1, 25))
+        if cuda:
+            likelihood = likelihood.cuda()
+            model = model.cuda()
         mll = gpytorch.mlls.VariationalELBO(likelihood, model, num_data=len(train_y))
 
         # Find optimal model hyperparameters
@@ -66,7 +69,7 @@ class TestSVGPRegression(unittest.TestCase):
         likelihood.train()
         optimizer = optim.Adam([{"params": model.parameters()}, {"params": likelihood.parameters()}], lr=0.01)
         with gpytorch.settings.skip_logdet_forward(skip_logdet_forward):
-            for _ in range(170):
+            for _ in range(150):
                 optimizer.zero_grad()
                 output = model(train_x)
                 loss = -mll(output, train_y)
@@ -92,36 +95,7 @@ class TestSVGPRegression(unittest.TestCase):
 
     def test_regression_error_cuda(self):
         if torch.cuda.is_available():
-            train_x, train_y = train_data(cuda=True)
-            likelihood = GaussianLikelihood().cuda()
-            model = SVGPRegressionModel(torch.linspace(0, 1, 25)).cuda()
-            mll = gpytorch.mlls.VariationalMarginalLogLikelihood(likelihood, model, num_data=len(train_y))
-
-            # Find optimal model hyperparameters
-            model.train()
-            optimizer = optim.Adam([{"params": model.parameters()}, {"params": likelihood.parameters()}], lr=0.01)
-            optimizer.n_iter = 0
-            for _ in range(150):
-                optimizer.zero_grad()
-                output = model(train_x)
-                loss = -mll(output, train_y)
-                loss.backward()
-                optimizer.n_iter += 1
-                optimizer.step()
-
-            for param in model.parameters():
-                self.assertTrue(param.grad is not None)
-                self.assertGreater(param.grad.norm().item(), 0)
-            for param in likelihood.parameters():
-                self.assertTrue(param.grad is not None)
-                self.assertGreater(param.grad.norm().item(), 0)
-            optimizer.step()
-
-            # Set back to eval mode
-            model.eval()
-            test_preds = likelihood(model(train_x)).mean.squeeze()
-            mean_abs_error = torch.mean(torch.abs(train_y - test_preds) / 2)
-            self.assertLess(mean_abs_error.item(), 1e-1)
+            self.test_regression_error(cuda=True)
 
 
 if __name__ == "__main__":

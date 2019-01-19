@@ -2,8 +2,8 @@
 
 import math
 import torch
-from .. import beta_features, settings
-from ..lazy import DiagLazyTensor, CachedCGLazyTensor, PsdSumLazyTensor, RootLazyTensor
+from .. import settings
+from ..lazy import DiagLazyTensor, CachedCGLazyTensor, PsdSumLazyTensor, RootLazyTensor, MatmulLazyTensor
 from ..module import Module
 from ..distributions import MultivariateNormal
 
@@ -53,6 +53,14 @@ class VariationalStrategy(Module):
         self.variational_distribution = variational_distribution
         self.register_buffer("variational_params_initialized", torch.tensor(0))
 
+    def mean_diff_inv_quad(self):
+        if not hasattr(self, "_mean_diff_inv_quad_memo"):
+            prior_mean = self.prior_distribution.mean
+            prior_covar = self.prior_distribution.covariance_matrix
+            variational_mean = self.variational_distribution.variational_distribution.mean
+            self._mean_diff_inv_quad_memo = prior_covar.inv_quad(variational_mean - prior_mean)
+        return self._mean_diff_inv_quad_memo
+
     @property
     def prior_distribution(self):
         """
@@ -60,11 +68,17 @@ class VariationalStrategy(Module):
         GP prior distribution of the inducing points, e.g. :math:`p(u) \sim N(\mu(X_u), K(X_u, X_u))`. Most commonly,
         this is done simply by calling the user defined GP prior on the inducing point data directly.
         """
-        if hasattr(self, "_prior_distribution_memo"):
-            return self._prior_distribution_memo
-        else:
+        if not hasattr(self, "_prior_distribution_memo"):
             out = self.model.forward(self.inducing_points)
-            return MultivariateNormal(out.mean, out.lazy_covariance_matrix.evaluate_kernel().add_jitter())
+            self._prior_distribution_memo = MultivariateNormal(
+                out.mean, out.lazy_covariance_matrix.evaluate_kernel().add_jitter()
+            )
+        return self._prior_distribution_memo
+
+    def prior_covar_logdet(self):
+        if not hasattr(self, "_logdet_memo"):
+            self._logdet_memo = self.prior_distribution.lazy_covariance_matrix.logdet()
+        return self._logdet_memo
 
     def forward(self, x):
         """
@@ -80,12 +94,32 @@ class VariationalStrategy(Module):
         """
         variational_dist = self.variational_distribution.variational_distribution
         inducing_points = self.inducing_points
-
         if inducing_points.dim() < x.dim():
             inducing_points = inducing_points.expand(*x.shape[:-2], *inducing_points.shape[-2:])
             variational_dist = variational_dist.expand(x.shape[:-2])
+
+        # If our points equal the inducing points, we're done
         if torch.equal(x, inducing_points):
-            return variational_dist
+            # De-whiten the prior covar
+            prior_covar = self.prior_distribution.lazy_covariance_matrix
+            if isinstance(variational_dist.lazy_covariance_matrix, RootLazyTensor):
+                predictive_covar = RootLazyTensor(
+                    prior_covar @ variational_dist.lazy_covariance_matrix.root.evaluate()
+                )
+            else:
+                predictive_covar = MatmulLazyTensor(
+                    prior_covar @ variational_dist.covariance_matrix, prior_covar,
+                )
+
+            # Cache some values for the KL divergence
+            if self.training:
+                self._mean_diff_inv_quad_memo, self._logdet_memo = prior_covar.inv_quad_logdet(
+                    (variational_dist.mean - self.prior_distribution.mean), logdet=True
+                )
+
+            return MultivariateNormal(variational_dist.mean, predictive_covar)
+
+        # Otherwise, we have to marginalize
         else:
             num_induc = inducing_points.size(-2)
             full_inputs = torch.cat([inducing_points, x], dim=-2)
@@ -95,57 +129,72 @@ class VariationalStrategy(Module):
             # Mean terms
             test_mean = full_mean[..., num_induc:]
             induc_mean = full_mean[..., :num_induc]
-            var_dist_mean = variational_dist.mean
-            mean_diff = (var_dist_mean - induc_mean).unsqueeze(-1)
+            mean_diff = (variational_dist.mean - induc_mean).unsqueeze(-1)
 
             # Covariance terms
             induc_induc_covar = full_covar[..., :num_induc, :num_induc].evaluate_kernel().add_jitter()
             induc_data_covar = full_covar[..., :num_induc, num_induc:].evaluate()
             data_data_covar = full_covar[..., num_induc:, num_induc:]
-            root_variational_covar = variational_dist.lazy_covariance_matrix.root_decomposition().root.evaluate()
 
             # Cache the CG results
-            left_tensors = torch.cat([mean_diff, root_variational_covar], -1)
-            with torch.no_grad():
-                eager_rhs = torch.cat([left_tensors, induc_data_covar], -1)
-                solve, probe_vecs, probe_vec_norms, probe_vec_solves, tmats = CachedCGLazyTensor.precompute_terms(
-                    induc_induc_covar, eager_rhs.detach(), logdet_terms=self.training,
-                    include_tmats=(not settings.skip_logdet_forward.on())
-                )
-                eager_rhss = [
-                    eager_rhs.detach(), eager_rhs[..., left_tensors.size(-1):].detach(),
-                    eager_rhs[..., :left_tensors.size(-1)].detach()
-                ]
-                solves = [
-                    solve.detach(), solve[..., left_tensors.size(-1):].detach(),
-                    solve[..., :left_tensors.size(-1)].detach()
-                ]
-                if settings.skip_logdet_forward.on():
-                    eager_rhss.append(torch.cat([probe_vecs, left_tensors], -1))
-                    solves.append(torch.cat([probe_vec_solves, solve[..., :left_tensors.size(-1)]], -1))
-            induc_induc_covar = CachedCGLazyTensor(
-                induc_induc_covar, eager_rhss=eager_rhss, solves=solves, probe_vectors=probe_vecs,
-                probe_vector_norms=probe_vec_norms, probe_vector_solves=probe_vec_solves,
-                probe_vector_tmats=tmats,
-            )
+            # For now: run variational inference without a preconditioner
+            # The preconditioner screws things up for some reason
+            with settings.max_preconditioner_size(0):
+                with torch.no_grad():
+                    eager_rhs = torch.cat([induc_data_covar, mean_diff], -1)
+                    solve, probe_vecs, probe_vec_norms, probe_vec_solves, tmats = CachedCGLazyTensor.precompute_terms(
+                        induc_induc_covar, eager_rhs.detach(), logdet_terms=self.training,
+                        include_tmats=(not settings.skip_logdet_forward.on())
+                    )
+                    eager_rhss = [eager_rhs.detach()]
+                    solves = [solve.detach()]
+                    if settings.skip_logdet_forward.on() and self.training:
+                        eager_rhss.append(torch.cat([probe_vecs, eager_rhs], -1))
+                        solves.append(torch.cat([probe_vec_solves, solve[..., :eager_rhs.size(-1)]], -1))
+                    elif not self.training:
+                        eager_rhss.append(eager_rhs[..., :-1])
+                        solves.append(solve[..., :-1])
 
-            # Cache the prior distribution, for faster training
+                induc_induc_covar = CachedCGLazyTensor(
+                    induc_induc_covar, eager_rhss=eager_rhss, solves=solves, probe_vectors=probe_vecs,
+                    probe_vector_norms=probe_vec_norms, probe_vector_solves=probe_vec_solves,
+                    probe_vector_tmats=tmats,
+                )
+
+            # Compute some terms that will be necessary for the predicitve covariance and KL divergence
             if self.training:
+                interp_data_data_var_plus_mean_diff_inv_quad, logdet = induc_induc_covar.inv_quad_logdet(
+                    torch.cat([induc_data_covar, mean_diff], -1), logdet=True, reduce_inv_quad=False
+                )
+                interp_data_data_var = interp_data_data_var_plus_mean_diff_inv_quad[..., :-1]
+                mean_diff_inv_quad = interp_data_data_var_plus_mean_diff_inv_quad[..., -1]
+            else:
+                interp_data_data_var = induc_induc_covar.inv_quad(induc_data_covar, reduce_inv_quad=False)
+
+            # Compute predictive mean
+            predictive_mean = torch.add(test_mean, induc_induc_covar.inv_matmul(
+                mean_diff, left_tensor=induc_data_covar.transpose(-1, -2)
+            ).squeeze(-1))
+
+            # Compute the predictive covariance
+            if isinstance(variational_dist.lazy_covariance_matrix, RootLazyTensor):
+                predictive_covar = RootLazyTensor(
+                    induc_data_covar.transpose(-1, -2) @ variational_dist.lazy_covariance_matrix.root.evaluate()
+                )
+            else:
+                predictive_covar = MatmulLazyTensor(
+                    induc_data_covar.transpose(-1, -2), predictive_covar @ induc_data_covar
+                )
+            diag_correction = DiagLazyTensor((data_data_covar.diag() - interp_data_data_var).clamp(0, math.inf))
+            predictive_covar = PsdSumLazyTensor(predictive_covar, diag_correction)
+
+            # Save the logdet, mean_diff_inv_quad, prior distribution for the ELBO
+            if self.training:
+                induc_mean = full_mean[..., :num_induc]
                 prior_dist = MultivariateNormal(induc_mean, induc_induc_covar)
                 self._prior_distribution_memo = prior_dist
-
-            # Compute predictive mean/covariance
-            inv_products = induc_induc_covar.inv_matmul(induc_data_covar, left_tensors.transpose(-1, -2))
-            predictive_mean = torch.add(test_mean, inv_products[..., 0, :])
-            predictive_covar = RootLazyTensor(inv_products[..., 1:, :].transpose(-1, -2))
-
-            # Compute a diagonal correction for the covariance. It is the diagonal of the Schur complement
-            # K_{data,data} - K_{data,induc} K_{induc,induc}^{-1} K_{induc,data}
-            if beta_features.diagonal_correction.on():
-                # interp_data_data_var = diag(K_{data,induc} K_{induc,induc}^{-1} K_{induc,data})
-                interp_data_data_var = induc_induc_covar.inv_quad(induc_data_covar, reduce_inv_quad=False)
-                diag_correction = DiagLazyTensor((data_data_covar.diag() - interp_data_data_var).clamp(0, math.inf))
-                predictive_covar = PsdSumLazyTensor(predictive_covar, diag_correction)
+                self._logdet_memo = logdet
+                self._mean_diff_inv_quad_memo = mean_diff_inv_quad
 
             return MultivariateNormal(predictive_mean, predictive_covar)
 
@@ -153,4 +202,11 @@ class VariationalStrategy(Module):
         if not self.variational_params_initialized.item():
             self.variational_distribution.initialize_variational_distribution(self.prior_distribution)
             self.variational_params_initialized.fill_(1)
+        if self.training:
+            if hasattr(self, "_prior_distribution_memo"):
+                del self._prior_distribution_memo
+            if hasattr(self, "_logdet_memo"):
+                del self._logdet_memo
+            if hasattr(self, "_mean_diff_inv_quad_memo"):
+                del self._mean_diff_inv_quad_memo
         return super(VariationalStrategy, self).__call__(x)
