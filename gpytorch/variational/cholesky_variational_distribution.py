@@ -37,7 +37,8 @@ class CholeskyVariationalDistribution(VariationalDistribution):
         self.variational_mean.data.fill_(0)  # No initial difference between prior/variational means
         inv_prior_covar = prior_dist.lazy_covariance_matrix.add_jitter().evaluate().double().inverse()
         self.chol_variational_covar.data.copy_(
-            torch.cholesky(inv_prior_covar.matmul(inv_prior_covar), upper=False)
+            inv_prior_covar.cholesky(upper=False).float()
+            # torch.cholesky(inv_prior_covar.matmul(inv_prior_covar), upper=False)
         )
         pass
 

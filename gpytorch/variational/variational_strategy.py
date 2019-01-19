@@ -110,6 +110,8 @@ class VariationalStrategy(Module):
 
             # Compute predictive mean/covariance
             predictive_mean = torch.add(test_mean, induc_data_covar.transpose(-1, -2) @ variational_dist.mean)
+            # from IPython.core.debugger import set_trace
+            # set_trace()
             if isinstance(variational_dist.lazy_covariance_matrix, RootLazyTensor):
                 predictive_covar = RootLazyTensor(
                     (variational_dist.lazy_covariance_matrix.root.transpose(-1, -2) @ induc_data_covar).transpose(-1, -2)
@@ -128,7 +130,7 @@ class VariationalStrategy(Module):
 
             # chol_induc = induc_induc_covar.evaluate().cholesky(upper=True)
             # A = torch.trtrs(induc_data_covar, chol_induc.t(), upper=False)[0] # m x n
-            # interp_data_data_var_chol = (A * A).sum(0).float()
+            # interp_data_data_var = (A * A).sum(0).float()
             # logdet = chol_induc.diag().pow(2).log().sum().float()
             # print(settings.max_cg_iterations._global_value)
             # solve_chol = torch.cholesky_solve(induc_data_covar, chol_induc.float(), upper=True)
@@ -141,7 +143,7 @@ class VariationalStrategy(Module):
             diag_correction = DiagLazyTensor((data_data_covar.diag() - interp_data_data_var).clamp(0, math.inf))
             # print(diag_correction.diag().mean(), interp_data_data_var.mean())
             predictive_covar = PsdSumLazyTensor(predictive_covar, diag_correction)
-
+            #print(predictive_covar.diag())
             # Save the logdet, prior distribution for the ELBO
             if self.training:
                 induc_mean = full_mean[..., :num_induc]
