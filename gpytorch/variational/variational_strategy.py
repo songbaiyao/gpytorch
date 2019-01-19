@@ -90,25 +90,8 @@ class VariationalStrategy(Module):
         if inducing_points.dim() < x.dim():
             inducing_points = inducing_points.expand(*x.shape[:-2], *inducing_points.shape[-2:])
             variational_dist = variational_dist.expand(x.shape[:-2])
-
         if torch.equal(x, inducing_points):
-            prior_dist = self.prior_distribution
-            predictive_mean = (prior_dist.lazy_covariance_matrix @ variational_dist.mean) + prior_dist.mean
-
-            if isinstance(variational_dist.lazy_covariance_matrix, RootLazyTensor):
-                predictive_covar = RootLazyTensor(
-                    variational_dist.lazy_covariance_matrix.root.transpose(-1, -2).matmul(
-                        prior_dist.covariance_matrix
-                    ).transpose(-1, -2)
-                )
-            else:
-                predictive_covar = MatmulLazyTensor(
-                    prior_dist.lazy_covariance_matrix,
-                    variational_dist.lazy_covariance_matrix @ prior_dist.covariance_matrix
-                )
-
-            return MultivariateNormal(predictive_mean, predictive_covar)
-
+            return variational_dist
         else:
             num_induc = inducing_points.size(-2)
             full_inputs = torch.cat([inducing_points, x], dim=-2)
@@ -119,17 +102,17 @@ class VariationalStrategy(Module):
             test_mean = full_mean[..., num_induc:]
 
             # Covariance terms
-            induc_induc_covar = full_covar[..., :num_induc, :num_induc].evaluate_kernel().add_jitter(1e-6)
+            induc_induc_covar = full_covar[..., :num_induc, :num_induc].evaluate_kernel().add_jitter()
             induc_data_covar = full_covar[..., :num_induc, num_induc:].evaluate()
             data_data_covar = full_covar[..., num_induc:, num_induc:]
+
+            # Cache the prior distribution, for faster training
 
             # Compute predictive mean/covariance
             predictive_mean = torch.add(test_mean, induc_data_covar.transpose(-1, -2) @ variational_dist.mean)
             if isinstance(variational_dist.lazy_covariance_matrix, RootLazyTensor):
                 predictive_covar = RootLazyTensor(
-                    variational_dist.lazy_covariance_matrix.root.transpose(-1, -2).matmul(
-                        induc_data_covar
-                    ).transpose(-1, -2)
+                    (variational_dist.lazy_covariance_matrix.root.transpose(-1, -2) @ induc_data_covar).transpose(-1, -2)
                 )
             else:
                 predictive_covar = MatmulLazyTensor(
@@ -137,31 +120,27 @@ class VariationalStrategy(Module):
                     predictive_covar @ induc_data_covar
                 )
 
-            # For now: run variational inference without a preconditioner
-            # The preconditioner screws things up for some reason
-            with settings.max_preconditioner_size(0):
-                interp_data_data_var, logdet = induc_induc_covar.inv_quad_logdet(
-                    induc_data_covar, logdet=(self.training), reduce_inv_quad=False
-                )
-                # chol_prior_covar = induc_induc_covar.evaluate().double().cholesky(upper=True).type_as(test_mean)
-                # a_matrix = torch.trtrs(
-                    # induc_data_covar.double(), chol_prior_covar.double(), upper=True,
-                # )[0].type_as(test_mean)
-                # print('inv_matmul')
-                # stuff = induc_induc_covar @ (induc_induc_covar.inv_matmul(induc_data_covar)) - induc_data_covar
-                # print("\n\n")
-                # print("Base norm:", induc_data_covar.norm(dim=-2))
-                # print("Chol error:", (induc_induc_covar @ torch.cholesky_solve(induc_data_covar, chol_prior_covar, upper=True) - induc_data_covar).norm(dim=-2) / induc_data_covar.norm(dim=-2))
-                # print("CG error:", (stuff).norm(dim=-2) / induc_data_covar.norm(dim=-2))
-                # print("\n\n")
-                # interp_data_data_var_2 = a_matrix.pow(2).sum(-2)
-                # logdet = induc_induc_covar.logdet()
-                # logdet = chol_prior_covar.diag().pow(2).log().sum()
-            diag_correction = DiagLazyTensor((data_data_covar.diag() - interp_data_data_var).clamp(0, math.inf))
-            predictive_covar = PsdSumLazyTensor(predictive_covar, diag_correction)
+            interp_data_data_var, logdet = induc_induc_covar.inv_quad_logdet(
+                induc_data_covar, logdet=(self.training), reduce_inv_quad=False
+            )
 
-            # print('CG:', interp_data_data_var.view(-1))
-            # print('Chol:', interp_data_data_var_2.view(-1))
+            # # logdet = induc_induc_covar.log_det()
+
+            # chol_induc = induc_induc_covar.evaluate().cholesky(upper=True)
+            # A = torch.trtrs(induc_data_covar, chol_induc.t(), upper=False)[0] # m x n
+            # interp_data_data_var_chol = (A * A).sum(0).float()
+            # logdet = chol_induc.diag().pow(2).log().sum().float()
+            # print(settings.max_cg_iterations._global_value)
+            # solve_chol = torch.cholesky_solve(induc_data_covar, chol_induc.float(), upper=True)
+            # norm_chol = torch.norm(induc_induc_covar.matmul(solve_chol) - induc_data_covar) / induc_data_covar.norm()
+            # solve = induc_induc_covar.inv_matmul(induc_data_covar)
+            # norm = torch.norm(induc_induc_covar.matmul(solve) - induc_data_covar) / induc_data_covar.norm()
+            # from IPython.core.debugger import set_trace
+            # set_trace()
+
+            diag_correction = DiagLazyTensor((data_data_covar.diag() - interp_data_data_var).clamp(0, math.inf))
+            # print(diag_correction.diag().mean(), interp_data_data_var.mean())
+            predictive_covar = PsdSumLazyTensor(predictive_covar, diag_correction)
 
             # Save the logdet, prior distribution for the ELBO
             if self.training:

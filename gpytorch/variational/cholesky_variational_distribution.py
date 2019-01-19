@@ -34,6 +34,11 @@ class CholeskyVariationalDistribution(VariationalDistribution):
         self.register_parameter(name="chol_variational_covar", parameter=torch.nn.Parameter(covar_init))
 
     def initialize_variational_distribution(self, prior_dist):
+        self.variational_mean.data.fill_(0)  # No initial difference between prior/variational means
+        inv_prior_covar = prior_dist.lazy_covariance_matrix.add_jitter().evaluate().double().inverse()
+        self.chol_variational_covar.data.copy_(
+            torch.cholesky(inv_prior_covar.matmul(inv_prior_covar), upper=False)
+        )
         pass
 
     @property

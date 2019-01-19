@@ -173,8 +173,8 @@ def linear_cg(
     rhs_norms = rhs.norm(dim=-2)
     result_norms = result.norm(dim=-2)
     residual_norms = residual.norm(dim=-2)
-    print(f"CG rhs norms - \t min: {rhs_norms.min().item()}, \t max: {rhs_norms.max().item()}, \t mean: {rhs_norms.mean().item()}")
-    print(f"CG result norms - \t min: {result_norms.min().item()}, \t max: {result_norms.max().item()}, \t mean: {result_norms.mean().item()}")
+    # print(f"CG rhs norms - \t min: {rhs_norms.min().item()}, \t max: {rhs_norms.max().item()}, \t mean: {rhs_norms.mean().item()}")
+    # print(f"CG result norms - \t min: {result_norms.min().item()}, \t max: {result_norms.max().item()}, \t mean: {result_norms.mean().item()}")
     print(f"CG residual norms - \t min: {residual_norms.min().item()}, \t max: {residual_norms.max().item()}, \t mean: {residual_norms.mean().item()}")
 
     if is_vector:

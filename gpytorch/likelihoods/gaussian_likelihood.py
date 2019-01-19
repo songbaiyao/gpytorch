@@ -2,6 +2,7 @@
 
 import math
 
+import torch
 from torch.nn.functional import softplus
 
 from .. import settings
@@ -84,7 +85,8 @@ class GaussianLikelihood(_GaussianLikelihoodBase):
 
         res = -0.5 * ((target - mean) ** 2 + variance) / noise
         res += -0.5 * noise.log() - 0.5 * math.log(2 * math.pi)
-        return res.sum(-1)
+        #return res.sum(-1)
+        return torch.distributions.Normal(mean, (variance + noise).sqrt()).log_prob(target).sum(-1)
 
     def pyro_sample_y(self, variational_dist_f, y_obs, sample_shape, name_prefix=""):
         import pyro
