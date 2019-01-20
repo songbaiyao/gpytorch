@@ -39,9 +39,7 @@ class VariationalELBO(MarginalLogLikelihood):
             -self.model.variational_strategy.prior_covar_logdet(),
             -variational_dist_u.lazy_covariance_matrix.logdet(),
             # tr(K^-1 S) = tr(K^1 K var_dist_covar K) = tr(K var_dist_covar)
-            (variational_dist_u.covariance_matrix * prior_dist.covariance_matrix).view(
-                *prior_dist.batch_shape, -1
-            ).sum(-1),
+            self.model.variational_strategy.covar_trace(),
             # (m - \mu u)^T K^-1 (m - \mu u)
             # = (K^-1 (m - \mu u)) K (K^1 (m - \mu u))
             # = (var_dist_mean)^T K (var_dist_mean)

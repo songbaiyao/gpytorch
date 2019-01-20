@@ -80,6 +80,14 @@ class VariationalStrategy(Module):
             self._logdet_memo = self.prior_distribution.lazy_covariance_matrix.logdet()
         return self._logdet_memo
 
+    def covar_trace(self):
+        if not hasattr(self, "_covar_trace_memo"):
+            variational_covar = self.variational_distribution.variational_distribution.covariance_matrix
+            prior_covar = self.prior_distribution.covariance_matrix
+            batch_shape = prior_covar.shape[:-2]
+            self._covar_trace_memo = (variational_covar * prior_covar).view(*batch_shape, -1).sum(-1)
+        return self._covar_trace_memo
+
     def forward(self, x):
         """
         The :func:`~gpytorch.variational.VariationalStrategy.forward` method determines how to marginalize out the
@@ -190,9 +198,7 @@ class VariationalStrategy(Module):
 
             # Save the logdet, mean_diff_inv_quad, prior distribution for the ELBO
             if self.training:
-                induc_mean = full_mean[..., :num_induc]
-                prior_dist = MultivariateNormal(induc_mean, induc_induc_covar)
-                self._prior_distribution_memo = prior_dist
+                self._prior_distribution_memo = MultivariateNormal(induc_mean, induc_induc_covar)
                 self._logdet_memo = logdet
                 self._mean_diff_inv_quad_memo = mean_diff_inv_quad
 
@@ -209,4 +215,6 @@ class VariationalStrategy(Module):
                 del self._logdet_memo
             if hasattr(self, "_mean_diff_inv_quad_memo"):
                 del self._mean_diff_inv_quad_memo
+            if hasattr(self, "_covar_trace_memo"):
+                del self._covar_trace_memo
         return super(VariationalStrategy, self).__call__(x)
