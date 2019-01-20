@@ -2,6 +2,7 @@
 
 import math
 import torch
+from .. import beta_features
 from ..lazy import DiagLazyTensor, PsdSumLazyTensor, RootLazyTensor, MatmulLazyTensor
 from .variational_strategy import VariationalStrategy
 from ..distributions import MultivariateNormal
@@ -96,9 +97,11 @@ class CholeskyVariationalStrategy(VariationalStrategy):
             predictive_covar = MatmulLazyTensor(
                 interp_data_data_root, predictive_covar @ interp_data_data_root.transpose(-1, -2)
             )
-        interp_data_data_var = interp_data_data_root.pow(2).sum(-1)
-        diag_correction = DiagLazyTensor((data_data_covar.diag() - interp_data_data_var).clamp(0, math.inf))
-        predictive_covar = PsdSumLazyTensor(predictive_covar, diag_correction)
+
+        if beta_features.diagonal_correction.on():
+            interp_data_data_var = interp_data_data_root.pow(2).sum(-1)
+            diag_correction = DiagLazyTensor((data_data_covar.diag() - interp_data_data_var).clamp(0, math.inf))
+            predictive_covar = PsdSumLazyTensor(predictive_covar, diag_correction)
 
         # Save the logdet, mean_diff_inv_quad, prior distribution for the ELBO
         if self.training:

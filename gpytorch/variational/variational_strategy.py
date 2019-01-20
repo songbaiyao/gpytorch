@@ -2,7 +2,7 @@
 
 import math
 import torch
-from .. import settings
+from .. import settings, beta_features
 from ..lazy import DiagLazyTensor, CachedCGLazyTensor, PsdSumLazyTensor, RootLazyTensor, MatmulLazyTensor
 from ..module import Module
 from ..distributions import MultivariateNormal
@@ -176,7 +176,7 @@ class VariationalStrategy(Module):
                 )
                 interp_data_data_var = interp_data_data_var_plus_mean_diff_inv_quad[..., :-1]
                 mean_diff_inv_quad = interp_data_data_var_plus_mean_diff_inv_quad[..., -1]
-            else:
+            elif beta_features.diagonal_correction.on():
                 interp_data_data_var = induc_induc_covar.inv_quad(induc_data_covar, reduce_inv_quad=False)
 
             # Compute predictive mean
@@ -193,13 +193,16 @@ class VariationalStrategy(Module):
                 predictive_covar = MatmulLazyTensor(
                     induc_data_covar.transpose(-1, -2), predictive_covar @ induc_data_covar
                 )
-            diag_correction = DiagLazyTensor((data_data_covar.diag() - interp_data_data_var).clamp(0, math.inf))
-            predictive_covar = PsdSumLazyTensor(predictive_covar, diag_correction)
+
+            if beta_features.diagonal_correction.on():
+                diag_correction = DiagLazyTensor((data_data_covar.diag() - interp_data_data_var).clamp(0, math.inf))
+                predictive_covar = PsdSumLazyTensor(predictive_covar, diag_correction)
 
             # Save the logdet, mean_diff_inv_quad, prior distribution for the ELBO
             if self.training:
                 self._prior_distribution_memo = MultivariateNormal(induc_mean, induc_induc_covar)
                 self._logdet_memo = -logdet
+                self._mean_diff_inv_quad_memo = mean_diff_inv_quad
 
             return MultivariateNormal(predictive_mean, predictive_covar)
 
