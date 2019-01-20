@@ -64,68 +64,45 @@ class CholeskyVariationalStrategy(VariationalStrategy):
             inducing_points = inducing_points.expand(*x.shape[:-2], *inducing_points.shape[-2:])
             variational_dist = variational_dist.expand(x.shape[:-2])
 
-        # If our points equal the inducing points, we're done
-        if torch.equal(x, inducing_points):
-            # De-whiten the prior covar
-            prior_covar = self.prior_distribution.lazy_covariance_matrix
-            if isinstance(variational_dist.lazy_covariance_matrix, RootLazyTensor):
-                predictive_covar = RootLazyTensor(
-                    prior_covar @ variational_dist.lazy_covariance_matrix.root.evaluate()
-                )
-            else:
-                predictive_covar = MatmulLazyTensor(
-                    prior_covar @ variational_dist.covariance_matrix, prior_covar,
-                )
+        num_induc = inducing_points.size(-2)
+        full_inputs = torch.cat([inducing_points, x], dim=-2)
+        full_output = self.model.forward(full_inputs)
+        full_mean, full_covar = full_output.mean, full_output.lazy_covariance_matrix
 
-            # Cache some values for the KL divergence
-            if self.training:
-                self._mean_diff_inv_quad_memo, self._logdet_memo = prior_covar.inv_quad_logdet(
-                    (variational_dist.mean - self.prior_distribution.mean), logdet=True
-                )
+        # Mean terms
+        test_mean = full_mean[..., num_induc:]
 
-            return MultivariateNormal(variational_dist.mean, predictive_covar)
+        # Covariance terms
+        induc_induc_covar = full_covar[..., :num_induc, :num_induc].evaluate_kernel().add_jitter()
+        induc_data_covar = full_covar[..., :num_induc, num_induc:].evaluate()
+        data_data_covar = full_covar[..., num_induc:, num_induc:]
 
-        # Otherwise, we have to marginalize
+        # Compute the Cholesky decomposition of induc_induc_covar
+        # Compute interp_data_data_root
+        induc_induc_covar_chol = induc_induc_covar.evaluate().double().cholesky()
+        interp_data_data_root = torch.trtrs(
+            induc_data_covar.double(), induc_induc_covar_chol, upper=False
+        )[0].type_as(induc_data_covar).transpose(-1, -2)
+
+        # Compute predictive mean
+        predictive_mean = torch.add(test_mean, interp_data_data_root @ variational_dist.mean)
+
+        # Compute the predictive covariance
+        if isinstance(variational_dist.lazy_covariance_matrix, RootLazyTensor):
+            predictive_covar = RootLazyTensor(
+                interp_data_data_root @ variational_dist.lazy_covariance_matrix.root.evaluate()
+            )
         else:
-            num_induc = inducing_points.size(-2)
-            full_inputs = torch.cat([inducing_points, x], dim=-2)
-            full_output = self.model.forward(full_inputs)
-            full_mean, full_covar = full_output.mean, full_output.lazy_covariance_matrix
+            predictive_covar = MatmulLazyTensor(
+                interp_data_data_root, predictive_covar @ interp_data_data_root.transpose(-1, -2)
+            )
+        interp_data_data_var = interp_data_data_root.pow(2).sum(-1)
+        diag_correction = DiagLazyTensor((data_data_covar.diag() - interp_data_data_var).clamp(0, math.inf))
+        predictive_covar = PsdSumLazyTensor(predictive_covar, diag_correction)
 
-            # Mean terms
-            test_mean = full_mean[..., num_induc:]
+        # Save the logdet, mean_diff_inv_quad, prior distribution for the ELBO
+        if self.training:
+            induc_mean = full_mean[..., :num_induc]
+            self._prior_distribution_memo = MultivariateNormal(induc_mean, induc_induc_covar)
 
-            # Covariance terms
-            induc_induc_covar = full_covar[..., :num_induc, :num_induc].evaluate_kernel().add_jitter()
-            induc_data_covar = full_covar[..., :num_induc, num_induc:].evaluate()
-            data_data_covar = full_covar[..., num_induc:, num_induc:]
-
-            # Compute the Cholesky decomposition of induc_induc_covar
-            # Compute interp_data_data_root
-            induc_induc_covar_chol = induc_induc_covar.evaluate().double().cholesky()
-            interp_data_data_root = torch.trtrs(
-                induc_data_covar.double(), induc_induc_covar_chol, upper=False
-            )[0].type_as(induc_data_covar).transpose(-1, -2)
-
-            # Compute predictive mean
-            predictive_mean = torch.add(test_mean, interp_data_data_root @ variational_dist.mean)
-
-            # Compute the predictive covariance
-            if isinstance(variational_dist.lazy_covariance_matrix, RootLazyTensor):
-                predictive_covar = RootLazyTensor(
-                    interp_data_data_root @ variational_dist.lazy_covariance_matrix.root.evaluate()
-                )
-            else:
-                predictive_covar = MatmulLazyTensor(
-                    interp_data_data_root, predictive_covar @ interp_data_data_root.transpose(-1, -2)
-                )
-            interp_data_data_var = interp_data_data_root.pow(2).sum(-1)
-            diag_correction = DiagLazyTensor((data_data_covar.diag() - interp_data_data_var).clamp(0, math.inf))
-            predictive_covar = PsdSumLazyTensor(predictive_covar, diag_correction)
-
-            # Save the logdet, mean_diff_inv_quad, prior distribution for the ELBO
-            if self.training:
-                induc_mean = full_mean[..., :num_induc]
-                self._prior_distribution_memo = MultivariateNormal(induc_mean, induc_induc_covar)
-
-            return MultivariateNormal(predictive_mean, predictive_covar)
+        return MultivariateNormal(predictive_mean, predictive_covar)
