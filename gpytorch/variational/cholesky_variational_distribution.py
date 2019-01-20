@@ -15,7 +15,7 @@ class CholeskyVariationalDistribution(VariationalDistribution):
     and we manually ensure that the diagonal remains positive.
     """
 
-    def __init__(self, num_inducing_points, batch_size=None):
+    def __init__(self, num_inducing_points, batch_size=None, init=None):
         """
         Args:
             num_inducing_points (int): Size of the variational distribution. This implies that the variational mean
@@ -32,12 +32,19 @@ class CholeskyVariationalDistribution(VariationalDistribution):
 
         self.register_parameter(name="variational_mean", parameter=torch.nn.Parameter(mean_init))
         self.register_parameter(name="chol_variational_covar", parameter=torch.nn.Parameter(covar_init))
+        self.init = init
 
     def initialize_variational_distribution(self, prior_dist):
-        self.variational_mean.data.copy_(prior_dist.mean)
-        self.chol_variational_covar.data.copy_(
-            prior_dist.covariance_matrix.double().inverse().cholesky().type_as(prior_dist.mean)
-        )
+        if self.init == 'prior':
+            self.chol_variational_covar.data.copy_(
+                prior_dist.covariance_matrix.double().cholesky().type_as(prior_dist.mean)
+            )
+        elif self.init == 'inv_prior':
+            self.chol_variational_covar.data.copy_(
+                prior_dist.covariance_matrix.double().inverse().cholesky().type_as(prior_dist.mean)
+            )
+        else:
+            pass
 
     @property
     def variational_distribution(self):
