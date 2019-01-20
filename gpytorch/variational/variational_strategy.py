@@ -56,7 +56,7 @@ class VariationalStrategy(Module):
     def mean_diff_inv_quad(self):
         if not hasattr(self, "_mean_diff_inv_quad_memo"):
             prior_mean = self.prior_distribution.mean
-            prior_covar = self.prior_distribution.covariance_matrix
+            prior_covar = self.prior_distribution.lazy_covariance_matrix
             variational_mean = self.variational_distribution.variational_distribution.mean
             self._mean_diff_inv_quad_memo = prior_covar.inv_quad(variational_mean - prior_mean)
         return self._mean_diff_inv_quad_memo
