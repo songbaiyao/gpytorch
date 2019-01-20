@@ -77,7 +77,7 @@ class VariationalStrategy(Module):
 
     def prior_covar_logdet(self):
         if not hasattr(self, "_logdet_memo"):
-            self._logdet_memo = self.prior_distribution.lazy_covariance_matrix.logdet()
+            self._logdet_memo = -self.prior_distribution.lazy_covariance_matrix.logdet()
         return self._logdet_memo
 
     def covar_trace(self):
@@ -199,8 +199,7 @@ class VariationalStrategy(Module):
             # Save the logdet, mean_diff_inv_quad, prior distribution for the ELBO
             if self.training:
                 self._prior_distribution_memo = MultivariateNormal(induc_mean, induc_induc_covar)
-                self._logdet_memo = logdet
-                self._mean_diff_inv_quad_memo = mean_diff_inv_quad
+                self._logdet_memo = -logdet
 
             return MultivariateNormal(predictive_mean, predictive_covar)
 

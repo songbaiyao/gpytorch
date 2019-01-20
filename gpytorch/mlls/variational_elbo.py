@@ -36,7 +36,7 @@ class VariationalELBO(MarginalLogLikelihood):
             # log|k| - log|S|
             # = log|K| - log|K var_dist_covar K|
             # = -log|K| - log|var_dist_covar|
-            -self.model.variational_strategy.prior_covar_logdet(),
+            self.model.variational_strategy.prior_covar_logdet(),
             -variational_dist_u.lazy_covariance_matrix.logdet(),
             # tr(K^-1 S) = tr(K^1 K var_dist_covar K) = tr(K var_dist_covar)
             self.model.variational_strategy.covar_trace(),
