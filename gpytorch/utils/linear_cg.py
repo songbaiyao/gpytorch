@@ -232,6 +232,8 @@ def linear_cg(
             prev_alpha_reciprocal.copy_(alpha_reciprocal)
             prev_beta.copy_(beta_tridiag)
 
+    print(residual.max(), residual.mean(), residual.min())
+
     if is_vector:
         result = result.squeeze(-1)
 
