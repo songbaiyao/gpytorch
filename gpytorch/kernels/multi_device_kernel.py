@@ -5,6 +5,7 @@ from torch.nn.parallel import DataParallel
 from .kernel import Kernel
 from ..lazy import CatLazyTensor, lazify
 from .. import settings
+import time
 
 
 class MultiDeviceKernel(DataParallel, Kernel):
@@ -34,12 +35,20 @@ class MultiDeviceKernel(DataParallel, Kernel):
             return self.module.forward(x1, x2, diag=True, **kwargs).to(self.output_device)
 
         if not x1.device == self.__cached_x1.device or not torch.equal(x1, self.__cached_x1):
+            print("Scattering x1")
+            start = time.time()
             self._x1_scattered, self._kwargs = self.scatter((x1,), kwargs, self.device_ids)
             self.__cached_x1 = x1
+            print("Scatter time: {}".format(time.time() - start))
+        else:
+            print("No need to scatter. x1 already cached")
 
         if not x2.device == self.__cached_x2.device or not torch.equal(x2, self.__cached_x2):
+            print("Replicating x2")
             self._x2_subs = [x2.to(x1_[0].device) for x1_ in self._x1_scattered]
             self.__cached_x2 = x2
+        else:
+            print("No need to replicate x2 since it's already cached")
 
         inputs = tuple((x1_[0], x2_) for x1_, x2_ in zip(self._x1_scattered, self._x2_subs))
 
